@@ -73,6 +73,7 @@ export function useChat(wsUrl: string): UseChatReturn {
     try {
       parsed = JSON.parse(raw) as ServerWsMessage;
     } catch {
+      console.error('[chat] Failed to parse message:', raw.substring(0, 100));
       return;
     }
 

@@ -16,8 +16,9 @@ export async function buildApp(options: AppOptions = {}): Promise<ReturnType<typ
 
   await fastify.register(fastifyWebSocket, {
     options: {
-      // Allow up to 10K concurrent connections
-      maxPayload: 1048576, // 1 MiB
+      // Generous payload limit to accommodate 10K concurrent connections;
+      // individual messages are capped at 2000 chars (~2 KB) by MessageService validation.
+      maxPayload: 65536, // 64 KiB — sufficient headroom above the 2 KB message limit
       backlog: 10000,
     },
   });

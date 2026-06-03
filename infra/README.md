@@ -32,6 +32,16 @@ shared data store (e.g., Redis Pub/Sub + PostgreSQL) in `apps/server/src/storage
 | `client-service.yaml` | ClusterIP Service for the client |
 | `ingress.yaml` | Nginx Ingress with WebSocket upgrade headers |
 
+## Before Deploying
+
+> **Important**: The ingress manifest (`ingress.yaml`) uses the placeholder hostname
+> `uxtweet.example.com`. Replace this with your actual domain before applying the manifests.
+>
+> ```bash
+> # Example: replace the placeholder with your real domain
+> sed -i 's/uxtweet.example.com/chat.yourdomain.com/g' infra/k3s/ingress.yaml
+> ```
+
 ## Deploying
 
 ```bash

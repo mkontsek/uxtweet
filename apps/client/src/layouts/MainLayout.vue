@@ -21,7 +21,8 @@ import { provide } from 'vue';
 import ConnectionStatus from '../components/ConnectionStatus.vue';
 import { useChat } from '../composables/useChat';
 
-const WS_URL = process.env.WS_URL ?? 'ws://localhost:3000/ws';
+const defaultProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = process.env.WS_URL ?? `${defaultProtocol}//localhost:3000/ws`;
 
 const chat = useChat(WS_URL);
 chat.connect();

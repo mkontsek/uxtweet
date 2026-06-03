@@ -34,18 +34,22 @@ export function registerWebSocketHandler(
 
     // Send welcome message with history
     void (async () => {
-      const history = await messages.getHistory(HISTORY_LIMIT);
-      socket.send(
-        JSON.stringify({
-          type: 'welcome',
-          clientId,
-          history,
-          userCount: connections.count,
-        }),
-      );
-
-      // Inform all clients about updated user count
-      connections.broadcast({ type: 'user_count', count: connections.count });
+      try {
+        const history = await messages.getHistory(HISTORY_LIMIT);
+        socket.send(
+          JSON.stringify({
+            type: 'welcome',
+            clientId,
+            history,
+            userCount: connections.count,
+          }),
+        );
+        // Inform all clients about updated user count
+        connections.broadcast({ type: 'user_count', count: connections.count });
+      } catch (err) {
+        fastify.log.error({ err, clientId }, 'Failed to send welcome message');
+        socket.send(JSON.stringify({ type: 'error', message: 'Failed to initialise session.' }));
+      }
     })();
 
     socket.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {

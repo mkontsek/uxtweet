@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uxtweet-server
+  namespace: uxtweet
+  labels:
+    app: uxtweet-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: uxtweet-server
+  template:
+    metadata:
+      labels:
+        app: uxtweet-server
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/mkontsek/uxtweet/server:latest
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: uxtweet-server-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      # Allow graceful WebSocket draining
+      terminationGracePeriodSeconds: 30

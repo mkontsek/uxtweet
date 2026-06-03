@@ -1,0 +1,98 @@
+# pgweb — a lightweight web UI for inspecting the PoC PostgreSQL database.
+# PostgreSQL is otherwise reachable only from inside the cluster (ClusterIP), so
+# this gives a browser at http://db.localhost to view tables and run queries.
+# It auto-connects via DATABASE_URL and is locked to that single session, so the
+# connection screen is hidden and it can only ever reach uxtweet-postgres.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: uxtweet-pgweb
+    namespace: uxtweet
+    labels:
+        app: uxtweet-pgweb
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            app: uxtweet-pgweb
+    template:
+        metadata:
+            labels:
+                app: uxtweet-pgweb
+        spec:
+            securityContext:
+                seccompProfile:
+                    type: RuntimeDefault
+            containers:
+                - name: pgweb
+                  image: sosedoff/pgweb:0.17.0
+                  securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                          drop: ['ALL']
+                  args:
+                      - --bind=0.0.0.0
+                      - --listen=8081
+                      - --lock-session
+                  env:
+                      # Same target as the API (api-configmap.yaml); sslmode is
+                      # disabled because the PoC Postgres serves plaintext.
+                      - name: DATABASE_URL
+                        value: 'postgresql://postgres@uxtweet-postgres:5432/uxtweet?sslmode=disable'
+                  ports:
+                      - containerPort: 8081
+                        protocol: TCP
+                  readinessProbe:
+                      httpGet:
+                          path: /
+                          port: 8081
+                      initialDelaySeconds: 3
+                      periodSeconds: 5
+                  livenessProbe:
+                      httpGet:
+                          path: /
+                          port: 8081
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                  resources:
+                      requests:
+                          cpu: 25m
+                          memory: 32Mi
+                      limits:
+                          cpu: 100m
+                          memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+    name: uxtweet-pgweb
+    namespace: uxtweet
+    labels:
+        app: uxtweet-pgweb
+spec:
+    selector:
+        app: uxtweet-pgweb
+    ports:
+        - port: 80
+          targetPort: 8081
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: uxtweet-pgweb
+    namespace: uxtweet
+spec:
+    # k3s ships Traefik as the default ingress controller.
+    ingressClassName: traefik
+    rules:
+        - host: db.localhost
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: uxtweet-pgweb
+                            port:
+                                number: 80

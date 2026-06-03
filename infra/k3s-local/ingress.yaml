@@ -1,0 +1,37 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: uxtweet-ingress
+    namespace: uxtweet
+spec:
+    # k3s ships Traefik as the default ingress controller. Traefik proxies
+    # WebSocket upgrades transparently, so no extra annotations are needed.
+    ingressClassName: traefik
+    rules:
+        # *.localhost resolves to 127.0.0.1 in browsers; Traefik listens on the
+        # host's :80. The web app connects its WebSocket to ws://<host>/ws (the
+        # SPA derives the URL from window.location), which routes to the server.
+        - host: uxtweet.localhost
+          http:
+              paths:
+                  - path: /ws
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: uxtweet-api
+                            port:
+                                number: 3000
+                  - path: /health
+                    pathType: Exact
+                    backend:
+                        service:
+                            name: uxtweet-api
+                            port:
+                                number: 3000
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: uxtweet-web
+                            port:
+                                number: 80

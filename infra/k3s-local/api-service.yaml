@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+    name: uxtweet-api
+    namespace: uxtweet
+    labels:
+        app: uxtweet-api
+spec:
+    selector:
+        app: uxtweet-api
+    ports:
+        # Named so the Prometheus ServiceMonitor can target it (scrapes /metrics).
+        - name: http
+          port: 3000
+          targetPort: 3000
+          protocol: TCP
+    type: ClusterIP

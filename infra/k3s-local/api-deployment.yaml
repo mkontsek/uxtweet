@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: uxtweet-api
+    namespace: uxtweet
+    labels:
+        app: uxtweet-api
+spec:
+    # Local PoC: 1 replica is plenty for a laptop. The HPA (1→4) scales it up
+    # under load. A production cluster would start higher (see wiki ADR-0004).
+    replicas: 1
+    selector:
+        matchLabels:
+            app: uxtweet-api
+    template:
+        metadata:
+            labels:
+                app: uxtweet-api
+        spec:
+            # Run as the unprivileged `node` user (uid 1000 in node:alpine) with a
+            # locked-down default seccomp profile.
+            securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                seccompProfile:
+                    type: RuntimeDefault
+            containers:
+                - name: api
+                  # PoC: local image imported into k3s containerd (scripts/build.sh).
+                  # deploy.sh pins this to the freshly-built git-SHA tag at rollout.
+                  image: uxtweet/api:latest
+                  imagePullPolicy: IfNotPresent
+                  securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      capabilities:
+                          drop: ['ALL']
+                  ports:
+                      - containerPort: 3000
+                        protocol: TCP
+                  envFrom:
+                      - configMapRef:
+                            name: uxtweet-api-config
+                  # SIGTERM marks the pod draining (/health → 503 so it leaves the
+                  # Service endpoints) and keeps serving existing WebSocket clients
+                  # for SHUTDOWN_DRAIN_MS before the listener closes (see server.ts).
+                  lifecycle:
+                      preStop:
+                          # Give kube-proxy time to drop this pod from endpoints
+                          # before the process receives SIGTERM, so no new upgrades
+                          # land mid-shutdown.
+                          exec:
+                              command: ['sleep', '5']
+                  resources:
+                      requests:
+                          cpu: 100m
+                          memory: 128Mi
+                      limits:
+                          cpu: 500m
+                          memory: 512Mi
+                  # Guards the slow boot (connects to Postgres/Redis) so liveness
+                  # only starts once the app is actually up — up to 60s.
+                  startupProbe:
+                      httpGet:
+                          path: /health
+                          port: 3000
+                      periodSeconds: 5
+                      failureThreshold: 12
+                  readinessProbe:
+                      httpGet:
+                          path: /health
+                          port: 3000
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                  livenessProbe:
+                      httpGet:
+                          path: /health
+                          port: 3000
+                      initialDelaySeconds: 15
+                      periodSeconds: 20
+                  volumeMounts:
+                      # readOnlyRootFilesystem: give Node a writable scratch dir.
+                      - name: tmp
+                        mountPath: /tmp
+            volumes:
+                - name: tmp
+                  emptyDir: {}
+            # preStop sleep (5s) + drain window (15s) + listener close, with margin.
+            terminationGracePeriodSeconds: 45
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+    name: uxtweet-api
+    namespace: uxtweet
+spec:
+    # Keep at least one API pod serving across voluntary disruptions (node
+    # drains, rollouts). Production should raise the HPA floor above 1 so a drain
+    # never has to wait on a reschedule (see wiki ADR-0004).
+    minAvailable: 1
+    selector:
+        matchLabels:
+            app: uxtweet-api

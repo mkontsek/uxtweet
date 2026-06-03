@@ -1,0 +1,109 @@
+name: CI
+
+on:
+    push:
+        branches: [master, main]
+    pull_request:
+        branches: [master, main]
+
+# Cancel superseded runs on the same ref so rapid pushes don't pile up.
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    ci:
+        name: Build & Test
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  version: 11.5.2
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: '24'
+                  cache: 'pnpm'
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Typecheck
+              run: pnpm typecheck
+
+            - name: Lint
+              run: pnpm lint
+
+            - name: Format check
+              run: pnpm format:check
+
+            - name: Test
+              run: pnpm test
+
+            - name: Build
+              run: pnpm build
+
+    manifests:
+        name: Validate k8s manifests
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+
+            # Schema-validate the k3s manifests so structural regressions are
+            # caught in CI. CRDs (ServiceMonitor, etc.) and the Helm values file
+            # have no upstream schema, so those are ignored.
+            - name: Validate with kubeconform
+              run: |
+                  docker run --rm -v "$PWD":/work -w /work ghcr.io/yannh/kubeconform:latest \
+                    -strict -summary -ignore-missing-schemas \
+                    -ignore-filename-pattern values.yaml \
+                    infra/k3s-local
+
+    e2e:
+        name: E2E (Playwright)
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  version: 11.5.2
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: '24'
+                  cache: 'pnpm'
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Install Playwright browsers
+              run: pnpm --filter @uxtweet/e2e exec playwright install --with-deps chromium
+
+            # Playwright's webServer runs `pnpm dev`, which brings up Postgres
+            # via Docker Compose and both dev servers before the tests start.
+            - name: Run e2e tests
+              run: pnpm test:e2e
+
+            - name: Upload Playwright report
+              if: failure()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: playwright-report
+                  path: e2e/playwright-report/
+                  retention-days: 7

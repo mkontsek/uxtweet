@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+    name: uxtweet-api
+    namespace: uxtweet
+    labels:
+        app: uxtweet-api
+        # Belt-and-suspenders: matches the chart release even though the values
+        # also relax serviceMonitorSelector to discover all monitors.
+        release: uxtweet-monitoring
+spec:
+    selector:
+        matchLabels:
+            app: uxtweet-api
+    endpoints:
+        - port: http
+          path: /metrics
+          interval: 15s

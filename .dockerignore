@@ -1,0 +1,31 @@
+# Keep the Docker build context small. The Dockerfiles copy the manifests and
+# source they need explicitly, so everything below is build-irrelevant noise.
+
+# Dependencies and build output (reinstalled/rebuilt inside the image)
+**/node_modules
+**/dist
+**/.turbo
+**/.quasar
+**/coverage
+**/*.tsbuildinfo
+
+# VCS, CI, tooling metadata
+.git
+.github
+.idea
+.vscode
+
+# Deploy/infra and docs not needed to build an image
+infra
+wiki
+scripts
+README.md
+*.md
+
+# Local env and logs
+**/.env
+**/.env.*
+**/*.log
+
+# OS cruft
+**/.DS_Store

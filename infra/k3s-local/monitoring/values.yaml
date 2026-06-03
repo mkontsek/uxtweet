@@ -1,0 +1,69 @@
+# Helm values for kube-prometheus-stack, tuned for a local k3s PoC.
+# Applied by scripts/deploy.sh: `helm upgrade --install uxtweet-monitoring
+# prometheus-community/kube-prometheus-stack -f this file`.
+
+# k3s bundles the control-plane components into a single process and does not
+# expose the standalone kube-controller-manager / scheduler / proxy / etcd
+# metrics endpoints the chart scrapes by default. Disable them so Prometheus
+# doesn't show permanently-"down" targets on a local cluster.
+kubeControllerManager:
+    enabled: false
+kubeScheduler:
+    enabled: false
+kubeProxy:
+    enabled: false
+kubeEtcd:
+    enabled: false
+
+# Trim Alertmanager for a local PoC — Prometheus + Grafana are enough to watch
+# the stack. Re-enable when you want alerting.
+alertmanager:
+    enabled: false
+
+grafana:
+    # Credentials come from a Secret (created by deploy.sh) rather than a
+    # plaintext value baked into version control. Override the defaults with
+    # GRAFANA_ADMIN_USER / GRAFANA_ADMIN_PASSWORD when running deploy.sh.
+    admin:
+        existingSecret: uxtweet-grafana-admin
+        userKey: admin-user
+        passwordKey: admin-password
+    service:
+        type: ClusterIP
+    resources:
+        requests:
+            cpu: 50m
+            memory: 256Mi
+        limits:
+            # Grafana 13 + the dashboard/datasource sidecars OOM at 256Mi
+            # (repeated OOMKilled restarts → transient 503s through Traefik).
+            memory: 512Mi
+
+prometheus:
+    prometheusSpec:
+        retention: 6h
+        # Discover ServiceMonitors/PodMonitors/Rules we create, not only those
+        # carrying this chart's release label (e.g. our uxtweet-api monitor).
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        serviceMonitorSelector: {}
+        serviceMonitorNamespaceSelector: {}
+        resources:
+            requests:
+                cpu: 100m
+                memory: 384Mi
+            limits:
+                memory: 768Mi
+
+prometheus-node-exporter:
+    resources:
+        requests:
+            cpu: 20m
+            memory: 32Mi
+
+kube-state-metrics:
+    resources:
+        requests:
+            cpu: 20m
+            memory: 64Mi

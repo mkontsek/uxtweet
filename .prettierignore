@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.turbo/
+*.log
+.env
+.env.local
+.env.*.local
+coverage/
+*.tsbuildinfo
+.quasar/
+playwright-report/
+test-results/
+blob-report/

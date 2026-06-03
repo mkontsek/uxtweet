@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: uxtweet-api-config
+    namespace: uxtweet
+data:
+    PORT: '3000'
+    HOST: '0.0.0.0'
+    NODE_ENV: 'production'
+    DATABASE_URL: 'postgresql://postgres@uxtweet-postgres:5432/uxtweet'
+    REDIS_URL: 'redis://uxtweet-redis:6379'
+    MESSAGE_HISTORY_RETENTION_DAYS: '30'

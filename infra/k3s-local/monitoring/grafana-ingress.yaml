@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: uxtweet-grafana
+    namespace: monitoring
+spec:
+    # k3s ships Traefik as the default ingress controller.
+    ingressClassName: traefik
+    rules:
+        - host: grafana.localhost
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            # <release>-grafana, created by kube-prometheus-stack.
+                            name: uxtweet-monitoring-grafana
+                            port:
+                                number: 80

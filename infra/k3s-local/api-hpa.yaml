@@ -1,0 +1,51 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+    name: uxtweet-api-hpa
+    namespace: uxtweet
+spec:
+    scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: uxtweet-api
+    # Local PoC sizing; production targets are far higher (see wiki ADR-0004).
+    minReplicas: 1
+    maxReplicas: 4
+    # NOTE: WebSocket load is connection-bound, not CPU-bound — ~idle sockets burn
+    # almost no CPU, so CPU/memory alone won't scale toward the 10k-connection
+    # target. Production should drive scaling off the per-pod active-connection
+    # gauge (`uxtweet_ws_connections`, already exported at /metrics) via the
+    # Prometheus adapter and raise maxReplicas. Example once the adapter is in:
+    #   - type: Pods
+    #     pods:
+    #       metric:
+    #         name: uxtweet_ws_connections
+    #       target:
+    #         type: AverageValue
+    #         averageValue: "5000"
+    metrics:
+        - type: Resource
+          resource:
+              name: cpu
+              target:
+                  type: Utilization
+                  averageUtilization: 60
+        - type: Resource
+          resource:
+              name: memory
+              target:
+                  type: Utilization
+                  averageUtilization: 70
+    behavior:
+        scaleUp:
+            stabilizationWindowSeconds: 30
+            policies:
+                - type: Pods
+                  value: 2
+                  periodSeconds: 60
+        scaleDown:
+            stabilizationWindowSeconds: 300
+            policies:
+                - type: Pods
+                  value: 1
+                  periodSeconds: 120

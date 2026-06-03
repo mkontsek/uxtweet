@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: uxtweet-web
+    namespace: uxtweet
+    labels:
+        app: uxtweet-web
+spec:
+    # Local PoC: a single static-file replica is enough.
+    replicas: 1
+    selector:
+        matchLabels:
+            app: uxtweet-web
+    template:
+        metadata:
+            labels:
+                app: uxtweet-web
+        spec:
+            # The nginx-unprivileged image runs as uid 101.
+            securityContext:
+                runAsNonRoot: true
+                runAsUser: 101
+                runAsGroup: 101
+                seccompProfile:
+                    type: RuntimeDefault
+            containers:
+                - name: web
+                  # PoC: local image imported into k3s containerd (scripts/build.sh).
+                  # deploy.sh pins this to the freshly-built git-SHA tag at rollout.
+                  image: uxtweet/web:latest
+                  imagePullPolicy: IfNotPresent
+                  securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      capabilities:
+                          drop: ['ALL']
+                  ports:
+                      - containerPort: 8080
+                        protocol: TCP
+                  resources:
+                      requests:
+                          cpu: 50m
+                          memory: 64Mi
+                      limits:
+                          cpu: 200m
+                          memory: 128Mi
+                  readinessProbe:
+                      httpGet:
+                          path: /
+                          port: 8080
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                  livenessProbe:
+                      httpGet:
+                          path: /
+                          port: 8080
+                      initialDelaySeconds: 10
+                      periodSeconds: 20
+                  volumeMounts:
+                      # readOnlyRootFilesystem: nginx writes its pid + temp files
+                      # under /tmp and caches under /var/cache/nginx.
+                      - name: tmp
+                        mountPath: /tmp
+                      - name: nginx-cache
+                        mountPath: /var/cache/nginx
+            volumes:
+                - name: tmp
+                  emptyDir: {}
+                - name: nginx-cache
+                  emptyDir: {}

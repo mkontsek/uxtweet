@@ -1,0 +1,28 @@
+# Local development dependencies. `pnpm dev` runs `docker compose up -d --wait`
+# (via `pnpm db:up`) to bring this up before the apps boot. Message history
+# persists in the named volume across container and host restarts — that is the
+# whole point of dropping the in-memory store (see wiki/Decisions ADR-0012).
+#
+# Credentials mirror the k3s manifest (infra/k3s-local/data-services.yaml):
+# user `postgres`, database `uxtweet`, trust auth — local-only, never production.
+services:
+    postgres:
+        image: postgres:18.4-alpine
+        container_name: uxtweet-postgres
+        environment:
+            POSTGRES_USER: postgres
+            POSTGRES_DB: uxtweet
+            POSTGRES_HOST_AUTH_METHOD: trust
+            PGDATA: /var/lib/postgresql/data/pgdata
+        ports:
+            - '5432:5432'
+        volumes:
+            - uxtweet-pgdata:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U postgres -d uxtweet']
+            interval: 5s
+            timeout: 3s
+            retries: 10
+
+volumes:
+    uxtweet-pgdata:

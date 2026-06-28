@@ -8,7 +8,7 @@ export default configure((ctx) => {
             errors: true,
         },
 
-        boot: ['logrocket'],
+        boot: ['pinia', 'logrocket'],
 
         css: ['app.scss'],
 

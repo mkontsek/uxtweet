@@ -6,9 +6,12 @@
   `clientId` (`ClientId`), valid only for the life of the socket; not a user
   account (there is no auth).
 - **Nickname** — a human-chosen display name a client claims via `join` before it
-  can post. Unique (case-insensitive) across **currently-connected** clients on
-  this pod; the chosen casing is preserved for display. 3–20 chars, matching
-  `[A-Za-z0-9_-]+`. Freed when the holder disconnects.
+  can post. Unique (case-insensitive) among **currently-connected** clients —
+  per-pod with the local registry, or across **all** pods when Redis backs the
+  `NicknameRegistry` (ADR-0015); the chosen casing is preserved for display. 3–20
+  chars, matching `[A-Za-z0-9_-]+`. Freed when the holder disconnects. The browser
+  remembers the chosen name in `localStorage` and re-claims it after a reload
+  (ADR-0016) — but it is not reserved server-side while disconnected.
 - **Message** — a single chat line (`ChatMessage`): `id` (UUID), `clientId`
   (author), `nickname` (author's display name), `content` (string), `timestamp`
   (ISO 8601 string).
@@ -39,8 +42,13 @@ interface ChatMessage {
 const NICKNAME_MIN_LENGTH = 3;
 const NICKNAME_MAX_LENGTH = 20;
 const NICKNAME_PATTERN = /^[A-Za-z0-9_-]+$/;
-// validateNickname(raw) → { ok: true; value } | { ok: false; reason }
+// nicknameSchema (Zod) is the source of truth; validateNickname(raw) wraps it →
+//   { ok: true; value } | { ok: false; reason }
 // Shared by client (instant feedback) and server (authoritative gate).
+
+const MESSAGE_MAX_LENGTH = 2000;
+// messageContentSchema (Zod) — trim, non-empty, ≤ MESSAGE_MAX_LENGTH;
+// validateMessageContent(raw) wraps it with the same discriminated result.
 
 type UserStatus = 'online' | 'idle';
 
@@ -90,16 +98,18 @@ otherwise ignored — never crash the connection.
 - **Nickname required before posting**: a `send` from a client that has not
   `join`ed is rejected with `error` code `not_joined`. The transport looks up the
   claimed nickname in `ConnectionManager` and stamps it on each `ChatMessage`.
-- **Nickname uniqueness** (authoritative in `ConnectionManager.claimNickname`):
-  compared case-insensitively across live connections; a clash returns `error`
-  code `nickname_taken`. `validateNickname` (in `@uxtweet/shared`) enforces the
-  length/charset rules and yields `invalid_nickname`.
-- **Content validation** (authoritative in `MessageService.createMessage`):
-  trimmed content must be non-empty and ≤ **2000** characters; violations throw
-  `MessageValidationError` and surface to the offending client as an `error`
-  frame with code `invalid_message`. Any other failure while creating a message
-  (store or bus) is logged server-side and masked behind a generic `error`
-  frame — internal error text never reaches clients.
+- **Nickname uniqueness** (authoritative in the `NicknameRegistry`): a name is
+  claimed case-insensitively before it is assigned — by `LocalNicknameRegistry`
+  per-pod, or `RedisNicknameRegistry` across pods (`SET … NX`); a clash returns
+  `error` code `nickname_taken` and the name is released on disconnect.
+  `validateNickname` (Zod, in `@uxtweet/shared`) enforces the length/charset rules
+  and yields `invalid_nickname`. See [[Decisions]] (ADR-0015).
+- **Content validation** (rules in the shared `messageContentSchema`; the single
+  domain gate is `MessageService.createMessage`): trimmed content must be non-empty
+  and ≤ **2000** characters; violations throw `MessageValidationError` and surface
+  to the offending client as an `error` frame with code `invalid_message`. Any
+  other failure while creating a message (store or bus) is logged server-side and
+  masked behind a generic `error` frame — internal error text never reaches clients.
 - **History retention**: PostgreSQL keeps messages for **30 days** (configurable
   via `MESSAGE_HISTORY_RETENTION_DAYS`); expired rows are pruned at startup and
   then hourly — never on the write path — and reads filter by the retention
@@ -108,12 +118,13 @@ otherwise ignored — never crash the connection.
   database — see [[Decisions]] (ADR-0012).
 - **Identity is ephemeral**: a new `clientId` is minted per connection. Reconnects
   get a new id; there is no session continuity. The client does, however, remember
-  the chosen nickname for the session and **re-sends `join`** automatically on
-  reconnect, so a dropped socket transparently re-claims the same name (if still
-  free).
+  the chosen nickname (in `localStorage`) and **re-sends `join`** automatically on
+  reconnect _and after a page reload_, so a dropped socket or refresh transparently
+  re-claims the same name (if still free) — see [[Decisions]] (ADR-0016).
 - **Defence in depth**: the client `maxlength=2000` and server `maxPayload` (64
-  KiB) guard the same limit, but `MessageService` is the source of truth. Add new
-  content rules there.
+  KiB) guard the same limit, but the shared `messageContentSchema` is the source of
+  truth and `MessageService` is the single gate. Add new content rules to the
+  schema in `@uxtweet/shared`.
 - **Roster fan-out**: a `user_list` is broadcast only when roster membership
   changes — a successful `join` and the disconnect of a _named_ client — never on
   the per-message path. The client keeps a chatting user "online" by freshening

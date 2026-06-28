@@ -16,11 +16,14 @@ pnpm dev              # starts Postgres (Docker), then web on :9000 + API on :30
 
 `pnpm dev` first runs `pnpm db:up` (`docker compose up -d --wait postgres`, see
 `compose.yaml`) and then the apps via Turborepo. The API defaults `DATABASE_URL`
-to `postgres://postgres@localhost:5432/uxtweet`; export your own to point
-elsewhere. **Chat history persists** in the `uxtweet-pgdata` Docker volume across
-restarts — there is no in-memory store (see [[Decisions]] ADR-0012). Redis is not
-used in dev (a single process broadcasts locally); it is only added when
-`REDIS_URL` is set, for cross-pod fan-out.
+to `postgres://postgres@localhost:5432/uxtweet` via a committed `apps/api/.env.defaults`
+loaded by `tsx --env-file` (cross-platform — the previous inline `VAR=… cmd` form
+broke `pnpm dev` on Windows `cmd.exe`); a real env var, or a personal gitignored
+`apps/api/.env`, overrides it. **Chat history persists** in the `uxtweet-pgdata`
+Docker volume across restarts — there is no in-memory store (see [[Decisions]]
+ADR-0012). Redis is not used in dev (a single process broadcasts locally, and
+nicknames are unique per-process); it is only added when `REDIS_URL` is set, for
+cross-pod message fan-out **and** cross-pod nickname uniqueness (ADR-0015).
 
 ```bash
 pnpm db:up            # start just Postgres (idempotent; waits for healthy)
@@ -171,9 +174,13 @@ the `monitoring` namespace (`infra/k3s-local/monitoring/values.yaml`, local-tune
   check the SPA reaches `ws://<host>/ws` (the `/ws` ingress path routes to the
   server, not the client) and that the host resolves.
 - **History "missing" after deploy or under load** — the local k3s deploy uses
-  Redis Pub/Sub + PostgreSQL for shared history and a 30-day retention window.
-  Check those pods first. If `REDIS_URL`/`DATABASE_URL` are absent, the server
-  falls back to the in-memory store (ADR-0002/0009 in [[Decisions]]).
+  Redis Pub/Sub for cross-pod broadcast and PostgreSQL for durable history (30-day
+  retention). Check those pods first. `DATABASE_URL` is **required** (the server
+  throws without it — ADR-0012); without `REDIS_URL` a pod still works but
+  broadcasts and nickname uniqueness are per-pod only (ADR-0009/0015).
+- **Same nickname accepted on two pods** — expected without Redis: uniqueness is
+  per-process via `LocalNicknameRegistry`. Set `REDIS_URL` so the
+  `RedisNicknameRegistry` makes it global (`uxtweet:nick:*` keys; ADR-0015).
 - **Frozen-lockfile failure in CI/Docker** — a manifest changed without
   regenerating `pnpm-lock.yaml`; run `pnpm install --lockfile-only` and commit it
   (see [[locked-versions]]).

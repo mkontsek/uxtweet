@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/server.js",
   "scripts": {
-    "dev": "DATABASE_URL=${DATABASE_URL:-postgres://postgres@localhost:5432/uxtweet} tsx watch src/server.ts",
+    "dev": "tsx watch --env-file=.env.defaults --env-file-if-exists=.env src/server.ts",
     "build": "tsup src/server.ts --format esm --out-dir dist",
     "start": "node dist/server.js",
     "test": "vitest run",

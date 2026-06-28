@@ -8,9 +8,17 @@ export {
     NICKNAME_MAX_LENGTH,
     NICKNAME_MIN_LENGTH,
     NICKNAME_PATTERN,
+    nicknameSchema,
     validateNickname,
 } from './nickname';
 export type { NicknameValidation } from './nickname';
+
+export {
+    MESSAGE_MAX_LENGTH,
+    messageContentSchema,
+    validateMessageContent,
+} from './messageContent';
+export type { MessageContentValidation } from './messageContent';
 
 export { USER_IDLE_THRESHOLD_MS, deriveUserStatus } from './roster';
 export type { RosterEntry, UserStatus } from './roster';

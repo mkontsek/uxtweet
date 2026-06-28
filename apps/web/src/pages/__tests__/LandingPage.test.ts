@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { defineComponent, h, ref, nextTick } from 'vue';
+import { defineComponent, h, nextTick } from 'vue';
 import type { VNode } from 'vue';
+import { createPinia, setActivePinia } from 'pinia';
+import type { Pinia } from 'pinia';
 import { mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
-import type { UseChatReturn } from '../../composables/useChat';
-import { CHAT_INJECTION_KEY } from '../../composables/useChat';
+import { useChatStore } from '../../stores/chat';
 import LandingPage from '../LandingPage.vue';
 
 const { router } = vi.hoisted(
@@ -18,24 +19,6 @@ const { router } = vi.hoisted(
     })
 );
 vi.mock('vue-router', () => ({ useRouter: (): typeof router => router }));
-
-function makeChat(over: Partial<UseChatReturn> = {}): UseChatReturn {
-    return {
-        messages: ref([]),
-        status: ref('open'),
-        clientId: ref(null),
-        userCount: ref(0),
-        users: ref([]),
-        nickname: ref(null),
-        hasJoined: ref(false),
-        joinError: ref(null),
-        join: vi.fn(),
-        sendMessage: vi.fn(),
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-        ...over,
-    } as UseChatReturn;
-}
 
 const stubs = {
     QPage: { template: '<div><slot /></div>' },
@@ -102,10 +85,13 @@ const stubs = {
     }),
 };
 
-function mountPage(chat: UseChatReturn): VueWrapper {
+let pinia: Pinia;
+let store: ReturnType<typeof useChatStore>;
+
+function mountPage(): VueWrapper {
     return mount(LandingPage, {
         global: {
-            provide: { [CHAT_INJECTION_KEY as symbol]: chat },
+            plugins: [pinia],
             stubs,
         },
     }) as VueWrapper;
@@ -113,23 +99,29 @@ function mountPage(chat: UseChatReturn): VueWrapper {
 
 describe('LandingPage', () => {
     beforeEach(() => {
+        window.localStorage.clear();
+        pinia = createPinia();
+        setActivePinia(pinia);
+        store = useChatStore();
+        store.status = 'open';
         router.push.mockClear();
         router.replace.mockClear();
     });
 
     it('redirects an already-joined visitor straight to chat', () => {
-        const wrapper = mountPage(makeChat({ hasJoined: ref(true) }));
+        store.hasJoined = true;
+        const wrapper = mountPage();
         expect(router.replace).toHaveBeenCalledWith({ name: 'chat' });
         wrapper.unmount();
     });
 
     it('joins with a valid nickname on submit', async () => {
-        const chat = makeChat();
-        const wrapper = mountPage(chat);
+        const join = vi.spyOn(store, 'join');
+        const wrapper = mountPage();
         await wrapper.find('[data-cy="nickname-input"]').setValue('alice');
         await wrapper.find('[data-cy="nickname-form"]').trigger('submit');
 
-        expect(chat.join).toHaveBeenCalledWith('alice');
+        expect(join).toHaveBeenCalledWith('alice');
         expect(
             wrapper.find('[data-cy="nickname-submit"]').attributes('data-label')
         ).toBe('Joining…');
@@ -137,12 +129,12 @@ describe('LandingPage', () => {
     });
 
     it('shows a validation error and does not join an invalid nickname', async () => {
-        const chat = makeChat();
-        const wrapper = mountPage(chat);
+        const join = vi.spyOn(store, 'join');
+        const wrapper = mountPage();
         await wrapper.find('[data-cy="nickname-input"]').setValue('a');
         await wrapper.find('[data-cy="nickname-form"]').trigger('submit');
 
-        expect(chat.join).not.toHaveBeenCalled();
+        expect(join).not.toHaveBeenCalled();
         expect(
             wrapper.find('[data-cy="nickname-input"]').attributes('data-error')
         ).toBe('true');
@@ -150,25 +142,22 @@ describe('LandingPage', () => {
     });
 
     it('navigates to chat once the server confirms the join', async () => {
-        const hasJoined = ref(false);
-        const wrapper = mountPage(makeChat({ hasJoined }));
-        hasJoined.value = true;
+        const wrapper = mountPage();
+        store.hasJoined = true;
         await nextTick();
         expect(router.push).toHaveBeenCalledWith({ name: 'chat' });
         wrapper.unmount();
     });
 
     it('stops the joining spinner when the server rejects the nickname', async () => {
-        const joinError = ref<string | null>(null);
-        const chat = makeChat({ joinError });
-        const wrapper = mountPage(chat);
+        const wrapper = mountPage();
         await wrapper.find('[data-cy="nickname-input"]').setValue('alice');
         await wrapper.find('[data-cy="nickname-form"]').trigger('submit');
         expect(
             wrapper.find('[data-cy="nickname-submit"]').attributes('data-label')
         ).toBe('Joining…');
 
-        joinError.value = 'taken';
+        store.joinError = 'taken';
         await nextTick();
         expect(
             wrapper.find('[data-cy="nickname-submit"]').attributes('data-label')
@@ -177,17 +166,15 @@ describe('LandingPage', () => {
     });
 
     it('offers a manual reconnect when the socket has given up', async () => {
-        const status = ref<'connecting' | 'open' | 'closed' | 'error'>(
-            'closed'
-        );
-        const chat = makeChat({ status });
-        const wrapper = mountPage(chat);
+        store.status = 'closed';
+        const connect = vi.spyOn(store, 'connect').mockImplementation(() => {});
+        const wrapper = mountPage();
 
         expect(
             wrapper.find('[data-cy="landing-connection-hint"]').text()
         ).toContain("Couldn't reach");
         await wrapper.find('[data-cy="landing-retry"]').trigger('click');
-        expect(chat.connect).toHaveBeenCalled();
+        expect(connect).toHaveBeenCalled();
         wrapper.unmount();
     });
 });

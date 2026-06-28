@@ -21,6 +21,9 @@
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix"
   },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
   "devDependencies": {
     "@vitest/coverage-v8": "2.1.9",
     "typescript": "5.9.3",

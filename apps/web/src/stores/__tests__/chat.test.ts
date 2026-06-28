@@ -1,23 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { defineComponent, h, type VNode } from 'vue';
-import { mount } from '@vue/test-utils';
-import { useChat } from '../useChat';
-
-// ---------------------------------------------------------------------------
-// withSetup – runs a composable inside a real component so lifecycle hooks
-// (onUnmounted, etc.) have the component context they expect.
-// ---------------------------------------------------------------------------
-function withSetup<T>(composable: () => T): [T, ReturnType<typeof mount>] {
-    let result!: T;
-    const App = defineComponent({
-        setup() {
-            result = composable();
-            return (): VNode => h('div');
-        },
-    });
-    const wrapper = mount(App);
-    return [result, wrapper];
-}
+import { createPinia, setActivePinia } from 'pinia';
+import { useChatStore } from '../chat';
 
 // ---------------------------------------------------------------------------
 // Minimal WebSocket mock
@@ -66,7 +49,7 @@ const WebSocketStub = vi.fn(function (url: string): MockWebSocket {
     mockInstance = new MockWebSocket(url);
     return mockInstance;
 });
-// Mirror the static readyState constants the composable reads
+// Mirror the static readyState constants the store reads
 // (WebSocket.OPEN, WebSocket.CONNECTING, …).
 Object.assign(WebSocketStub, {
     CONNECTING: MockWebSocket.CONNECTING,
@@ -77,47 +60,40 @@ Object.assign(WebSocketStub, {
 
 vi.stubGlobal('WebSocket', WebSocketStub);
 
-describe('useChat composable', () => {
+describe('chat store', () => {
     beforeEach(() => {
+        // A fresh Pinia per test isolates store state; clear storage so a
+        // remembered nickname from one test can't auto-rejoin in the next.
+        window.localStorage.clear();
+        setActivePinia(createPinia());
         mockInstance = null;
     });
 
     afterEach(() => {
-        vi.restoreAllMocks();
+        vi.clearAllMocks();
     });
 
     it('starts with closed status', () => {
-        const [{ status }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        expect(status.value).toBe('closed');
-        wrapper.unmount();
+        const store = useChatStore();
+        expect(store.status).toBe('closed');
     });
 
     it('transitions to connecting on connect()', () => {
-        const [{ status, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
-        expect(status.value).toBe('connecting');
-        wrapper.unmount();
+        const store = useChatStore();
+        store.connect();
+        expect(store.status).toBe('connecting');
     });
 
     it('transitions to open after WebSocket open event', () => {
-        const [{ status, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
-        expect(status.value).toBe('open');
-        wrapper.unmount();
+        expect(store.status).toBe('open');
     });
 
     it('processes welcome message', () => {
-        const [{ messages, clientId, userCount, connect }, wrapper] = withSetup(
-            () => useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         const welcome = {
@@ -132,20 +108,18 @@ describe('useChat composable', () => {
                 },
             ],
             userCount: 5,
+            users: [],
         };
         mockInstance!.emit('message', { data: JSON.stringify(welcome) });
 
-        expect(clientId.value).toBe('abc-123');
-        expect(messages.value).toHaveLength(1);
-        expect(userCount.value).toBe(5);
-        wrapper.unmount();
+        expect(store.clientId).toBe('abc-123');
+        expect(store.messages).toHaveLength(1);
+        expect(store.userCount).toBe(5);
     });
 
     it('appends chat messages', () => {
-        const [{ messages, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         const chat = {
@@ -159,19 +133,16 @@ describe('useChat composable', () => {
         };
         mockInstance!.emit('message', { data: JSON.stringify(chat) });
 
-        expect(messages.value).toHaveLength(1);
-        expect(messages.value[0]?.content).toBe('Hey!');
-        wrapper.unmount();
+        expect(store.messages).toHaveLength(1);
+        expect(store.messages[0]?.content).toBe('Hey!');
     });
 
     it('sendMessage sends serialised JSON', () => {
-        const [{ connect, sendMessage }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
-        sendMessage('Hello server');
+        store.sendMessage('Hello server');
 
         expect(mockInstance!.sentMessages).toHaveLength(1);
         const sent = JSON.parse(mockInstance!.sentMessages[0]!) as {
@@ -180,28 +151,22 @@ describe('useChat composable', () => {
         };
         expect(sent.type).toBe('send');
         expect(sent.content).toBe('Hello server');
-        wrapper.unmount();
     });
 
     it('transitions to closed after WebSocket close event', () => {
-        const [{ status, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
         mockInstance!.close();
-        expect(status.value).toBe('closed');
-        wrapper.unmount();
+        expect(store.status).toBe('closed');
     });
 
     it('join sends a join frame with the nickname', () => {
-        const [{ connect, join }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
-        join('alice');
+        store.join('alice');
 
         const sent = JSON.parse(mockInstance!.sentMessages[0]!) as {
             type: string;
@@ -209,32 +174,26 @@ describe('useChat composable', () => {
         };
         expect(sent.type).toBe('join');
         expect(sent.nickname).toBe('alice');
-        wrapper.unmount();
     });
 
     it('marks the session joined on a joined message', () => {
-        const [{ connect, hasJoined, nickname }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         mockInstance!.emit('message', {
             data: JSON.stringify({ type: 'joined', nickname: 'alice' }),
         });
 
-        expect(hasJoined.value).toBe(true);
-        expect(nickname.value).toBe('alice');
-        wrapper.unmount();
+        expect(store.hasJoined).toBe(true);
+        expect(store.nickname).toBe('alice');
     });
 
     it('surfaces a nickname_taken error without joining', () => {
-        const [{ connect, join, hasJoined, joinError }, wrapper] = withSetup(
-            () => useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
-        join('alice');
+        store.join('alice');
 
         mockInstance!.emit('message', {
             data: JSON.stringify({
@@ -244,16 +203,13 @@ describe('useChat composable', () => {
             }),
         });
 
-        expect(hasJoined.value).toBe(false);
-        expect(joinError.value).toBe('taken');
-        wrapper.unmount();
+        expect(store.hasJoined).toBe(false);
+        expect(store.joinError).toBe('taken');
     });
 
     it('populates the roster from the welcome frame', () => {
-        const [{ users, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         const ts = new Date().toISOString();
@@ -269,15 +225,12 @@ describe('useChat composable', () => {
             }),
         });
 
-        expect(users.value.map((u) => u.nickname)).toEqual(['alice']);
-        wrapper.unmount();
+        expect(store.users.map((u) => u.nickname)).toEqual(['alice']);
     });
 
     it('replaces the roster on a user_list frame', () => {
-        const [{ users, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         const ts = new Date().toISOString();
@@ -291,15 +244,12 @@ describe('useChat composable', () => {
             }),
         });
 
-        expect(users.value.map((u) => u.nickname)).toEqual(['alice', 'bob']);
-        wrapper.unmount();
+        expect(store.users.map((u) => u.nickname)).toEqual(['alice', 'bob']);
     });
 
     it('freshens a roster entry lastActivityAt from incoming chat', () => {
-        const [{ users, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         const stale = '2026-06-05T10:00:00.000Z';
@@ -330,15 +280,12 @@ describe('useChat composable', () => {
             }),
         });
 
-        expect(users.value[0]?.lastActivityAt).toBe(fresh);
-        wrapper.unmount();
+        expect(store.users[0]?.lastActivityAt).toBe(fresh);
     });
 
     it('clears the roster when the socket closes', () => {
-        const [{ users, connect }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
 
         const ts = new Date().toISOString();
@@ -350,20 +297,17 @@ describe('useChat composable', () => {
                 ],
             }),
         });
-        expect(users.value).toHaveLength(1);
+        expect(store.users).toHaveLength(1);
 
         mockInstance!.close();
-        expect(users.value).toHaveLength(0);
-        wrapper.unmount();
+        expect(store.users).toHaveLength(0);
     });
 
     it('re-claims the nickname automatically after reconnect', () => {
-        const [{ connect, join }, wrapper] = withSetup(() =>
-            useChat('ws://localhost:3000/ws')
-        );
-        connect();
+        const store = useChatStore();
+        store.connect();
         mockInstance!.emit('open');
-        join('alice');
+        store.join('alice');
         mockInstance!.emit('message', {
             data: JSON.stringify({ type: 'joined', nickname: 'alice' }),
         });
@@ -378,6 +322,58 @@ describe('useChat composable', () => {
         };
         expect(mockInstance!.sentMessages.length).toBe(before + 1);
         expect(last).toEqual({ type: 'join', nickname: 'alice' });
-        wrapper.unmount();
+    });
+
+    describe('session persistence', () => {
+        it('persists the nickname on a confirmed join', () => {
+            const store = useChatStore();
+            store.connect();
+            mockInstance!.emit('open');
+            store.join('alice');
+            mockInstance!.emit('message', {
+                data: JSON.stringify({ type: 'joined', nickname: 'alice' }),
+            });
+
+            expect(window.localStorage.getItem('uxtweet:nickname')).toBe(
+                'alice'
+            );
+        });
+
+        it('auto-rejoins a remembered nickname on connect', () => {
+            window.localStorage.setItem('uxtweet:nickname', 'bob');
+            // Re-create the store so it reads the seeded storage on setup.
+            setActivePinia(createPinia());
+
+            const store = useChatStore();
+            expect(store.isRestoringSession).toBe(true);
+
+            store.connect();
+            mockInstance!.emit('open');
+
+            const sent = JSON.parse(mockInstance!.sentMessages[0]!) as {
+                type: string;
+                nickname: string;
+            };
+            expect(sent).toEqual({ type: 'join', nickname: 'bob' });
+        });
+
+        it('forgets a remembered nickname the server rejects', () => {
+            window.localStorage.setItem('uxtweet:nickname', 'bob');
+            setActivePinia(createPinia());
+
+            const store = useChatStore();
+            store.connect();
+            mockInstance!.emit('open');
+            mockInstance!.emit('message', {
+                data: JSON.stringify({
+                    type: 'error',
+                    code: 'nickname_taken',
+                    message: 'taken',
+                }),
+            });
+
+            expect(store.isRestoringSession).toBe(false);
+            expect(window.localStorage.getItem('uxtweet:nickname')).toBeNull();
+        });
     });
 });

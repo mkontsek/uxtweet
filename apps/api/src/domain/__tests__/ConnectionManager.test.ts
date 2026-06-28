@@ -139,36 +139,33 @@ describe('ConnectionManager', () => {
             manager.add(makeClient('c2'));
         });
 
-        it('claims an available nickname', () => {
-            expect(manager.claimNickname('c1', 'alice')).toBe(true);
+        it('records a nickname for display and the roster', () => {
+            manager.setNickname('c1', 'alice');
             expect(manager.nicknameOf('c1')).toBe('alice');
         });
 
-        it('rejects a nickname already held by another client', () => {
-            manager.claimNickname('c1', 'alice');
-            expect(manager.claimNickname('c2', 'alice')).toBe(false);
-            expect(manager.nicknameOf('c2')).toBeUndefined();
+        it('preserves the chosen casing', () => {
+            manager.setNickname('c1', 'Alice_42');
+            expect(manager.nicknameOf('c1')).toBe('Alice_42');
         });
 
-        it('compares uniqueness case-insensitively but preserves casing', () => {
-            manager.claimNickname('c1', 'Alice');
-            expect(manager.claimNickname('c2', 'ALICE')).toBe(false);
-            expect(manager.nicknameOf('c1')).toBe('Alice');
+        it('does not enforce uniqueness — that is the registry concern', () => {
+            // ConnectionManager is no longer the uniqueness gate; the
+            // NicknameRegistry claims a name before setNickname is ever called.
+            manager.setNickname('c1', 'alice');
+            manager.setNickname('c2', 'alice');
+            expect(manager.nicknameOf('c2')).toBe('alice');
         });
 
-        it('allows the same client to re-claim its own nickname', () => {
-            manager.claimNickname('c1', 'alice');
-            expect(manager.claimNickname('c1', 'alice')).toBe(true);
-        });
-
-        it('frees a nickname when the holder disconnects', () => {
-            manager.claimNickname('c1', 'alice');
+        it('clears the nickname when the client disconnects', () => {
+            manager.setNickname('c1', 'alice');
             manager.remove('c1');
-            expect(manager.claimNickname('c2', 'alice')).toBe(true);
+            expect(manager.nicknameOf('c1')).toBeUndefined();
         });
 
-        it('returns false for an unknown client', () => {
-            expect(manager.claimNickname('ghost', 'alice')).toBe(false);
+        it('is a no-op for an unknown client', () => {
+            expect(() => manager.setNickname('ghost', 'alice')).not.toThrow();
+            expect(manager.nicknameOf('ghost')).toBeUndefined();
         });
     });
 
@@ -187,7 +184,7 @@ describe('ConnectionManager', () => {
                 connectedAt,
                 lastActivityAt: connectedAt,
             });
-            manager.claimNickname('c1', 'alice');
+            manager.setNickname('c1', 'alice');
 
             const roster = manager.roster();
 
@@ -217,7 +214,7 @@ describe('ConnectionManager', () => {
                 connectedAt,
                 lastActivityAt: connectedAt,
             });
-            manager.claimNickname('c1', 'alice');
+            manager.setNickname('c1', 'alice');
 
             manager.touchActivity('c1');
 

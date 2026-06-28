@@ -1,5 +1,5 @@
-import { ref, readonly, onUnmounted, inject } from 'vue';
-import type { Ref, InjectionKey } from 'vue';
+import { ref } from 'vue';
+import { defineStore } from 'pinia';
 import type {
     ChatMessage,
     ClientId,
@@ -10,38 +10,58 @@ import { identifyUser, trackEvent } from '../analytics';
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed' | 'error';
 
-export interface UseChatReturn {
-    messages: Readonly<Ref<readonly ChatMessage[]>>;
-    status: Readonly<Ref<ConnectionStatus>>;
-    clientId: Readonly<Ref<ClientId | null>>;
-    userCount: Readonly<Ref<number>>;
-    users: Readonly<Ref<readonly RosterEntry[]>>;
-    nickname: Readonly<Ref<string | null>>;
-    hasJoined: Readonly<Ref<boolean>>;
-    joinError: Readonly<Ref<string | null>>;
-    join: (nickname: string) => void;
-    sendMessage: (content: string) => void;
-    connect: () => void;
-    disconnect: () => void;
-}
-
-// Typed provide/inject contract for the single chat instance created by
-// MainLayout. A symbol key carries the value type, so consumers get full typing
-// without a magic string or a per-call generic. Use `useChatContext()` to read.
-export const CHAT_INJECTION_KEY: InjectionKey<UseChatReturn> = Symbol('chat');
-
-export function useChatContext(): UseChatReturn {
-    const chat = inject(CHAT_INJECTION_KEY);
-    if (!chat) {
-        throw new Error('Chat context not provided. Wrap with MainLayout.');
-    }
-    return chat;
-}
-
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
-export function useChat(wsUrl: string): UseChatReturn {
+// Where the chosen nickname is remembered across page reloads so a refresh
+// re-joins the same name automatically instead of bouncing back to the landing
+// screen (the session itself is still a fresh WebSocket — only the name persists).
+const NICKNAME_STORAGE_KEY = 'uxtweet:nickname';
+
+function readStoredNickname(): string | null {
+    try {
+        return window.localStorage.getItem(NICKNAME_STORAGE_KEY);
+    } catch {
+        return null;
+    }
+}
+
+function persistNickname(value: string): void {
+    try {
+        window.localStorage.setItem(NICKNAME_STORAGE_KEY, value);
+    } catch {
+        // Private-mode / disabled storage: degrade to a non-persistent session.
+    }
+}
+
+function clearStoredNickname(): void {
+    try {
+        window.localStorage.removeItem(NICKNAME_STORAGE_KEY);
+    } catch {
+        // Ignore — nothing to clean up if storage is unavailable.
+    }
+}
+
+function resolveWsUrl(): string {
+    const configured = process.env.WS_URL;
+    if (configured) {
+        return configured;
+    }
+    // In production WS_URL is empty (see quasar.config); derive it from the
+    // current origin so the socket targets whatever host/ingress served the SPA.
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${window.location.host}/ws`;
+}
+
+/**
+ * The single owner of the WebSocket lifecycle and chat state, as a Pinia store
+ * so any component reaches it with `useChatStore()` (no provide/inject plumbing).
+ * `MainLayout` drives connect/disconnect from its own lifecycle; components only
+ * read state and call actions.
+ */
+export const useChatStore = defineStore('chat', () => {
+    const wsUrl = resolveWsUrl();
+
     const messages = ref<ChatMessage[]>([]);
     const status = ref<ConnectionStatus>('closed');
     const clientId = ref<ClientId | null>(null);
@@ -51,13 +71,19 @@ export function useChat(wsUrl: string): UseChatReturn {
     const hasJoined = ref(false);
     const joinError = ref<string | null>(null);
 
+    // The chosen name from a previous visit. When present we auto-rejoin on
+    // connect and tell the UI a restore is in flight so it doesn't flash the
+    // landing screen before the server confirms.
+    const storedNickname = readStoredNickname();
+    const isRestoringSession = ref(storedNickname !== null);
+
     let socket: WebSocket | null = null;
     let reconnectAttempts = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let intentionalClose = false;
     // The nickname the user wants to hold. Kept across reconnects so the session
     // re-claims the same name automatically once the socket comes back.
-    let desiredNickname: string | null = null;
+    let desiredNickname: string | null = storedNickname;
 
     function connect(): void {
         intentionalClose = false;
@@ -90,7 +116,7 @@ export function useChat(wsUrl: string): UseChatReturn {
         socket.addEventListener('open', () => {
             reconnectAttempts = 0;
             status.value = 'open';
-            // Re-claim the chosen nickname after a (re)connect.
+            // Re-claim the chosen nickname after a (re)connect or page reload.
             if (desiredNickname !== null) {
                 sendJoin(desiredNickname);
             }
@@ -110,7 +136,11 @@ export function useChat(wsUrl: string): UseChatReturn {
                 reconnectAttempts < MAX_RECONNECT_ATTEMPTS
             ) {
                 scheduleReconnect();
+                return;
             }
+            // Auto-reconnect has given up (or this was a deliberate close): a
+            // pending session restore can no longer complete, so stop waiting.
+            isRestoringSession.value = false;
         });
 
         socket.addEventListener('error', () => {
@@ -141,6 +171,9 @@ export function useChat(wsUrl: string): UseChatReturn {
                 nickname.value = parsed.nickname;
                 hasJoined.value = true;
                 joinError.value = null;
+                isRestoringSession.value = false;
+                // Remember the confirmed-good name for the next page load.
+                persistNickname(parsed.nickname);
                 identifyUser(parsed.nickname);
                 break;
             case 'chat':
@@ -162,9 +195,12 @@ export function useChat(wsUrl: string): UseChatReturn {
                     parsed.code === 'invalid_nickname'
                 ) {
                     joinError.value = parsed.message;
-                    // Don't auto-retry a rejected name on the next reconnect.
+                    // Don't auto-retry a rejected name on the next reconnect or
+                    // reload — forget it and let the user choose a new one.
                     if (!hasJoined.value) {
                         desiredNickname = null;
+                        isRestoringSession.value = false;
+                        clearStoredNickname();
                     }
                 } else {
                     console.error('[chat] Server error:', parsed.message);
@@ -175,10 +211,10 @@ export function useChat(wsUrl: string): UseChatReturn {
 
     // Keep a chatting user marked "online" without any extra server frame: every
     // incoming chat message bumps the matching roster entry's last-activity time.
-    function freshenActivity(nickname: string, timestamp: string): void {
+    function freshenActivity(entryNickname: string, timestamp: string): void {
         let changed = false;
         const next = users.value.map((entry) => {
-            if (entry.nickname !== nickname) {
+            if (entry.nickname !== entryNickname) {
                 return entry;
             }
             changed = true;
@@ -192,6 +228,8 @@ export function useChat(wsUrl: string): UseChatReturn {
     function join(requested: string): void {
         desiredNickname = requested;
         joinError.value = null;
+        // A deliberate join is not a passive restore.
+        isRestoringSession.value = false;
         if (socket?.readyState === WebSocket.OPEN) {
             sendJoin(requested);
         }
@@ -202,7 +240,9 @@ export function useChat(wsUrl: string): UseChatReturn {
     }
 
     function sendMessage(content: string): void {
-        if (socket?.readyState !== WebSocket.OPEN) return;
+        if (socket?.readyState !== WebSocket.OPEN) {
+            return;
+        }
         socket.send(JSON.stringify({ type: 'send', content }));
         trackEvent('message_sent');
     }
@@ -221,22 +261,21 @@ export function useChat(wsUrl: string): UseChatReturn {
         }
     }
 
-    onUnmounted(() => {
-        disconnect();
-    });
-
     return {
-        messages: readonly(messages),
-        status: readonly(status),
-        clientId: readonly(clientId),
-        userCount: readonly(userCount),
-        users: readonly(users),
-        nickname: readonly(nickname),
-        hasJoined: readonly(hasJoined),
-        joinError: readonly(joinError),
+        messages,
+        status,
+        clientId,
+        userCount,
+        users,
+        nickname,
+        hasJoined,
+        joinError,
+        isRestoringSession,
         join,
         sendMessage,
         connect,
         disconnect,
     };
-}
+});
+
+export type ChatStore = ReturnType<typeof useChatStore>;

@@ -24,24 +24,28 @@ rules live in `typescript.md`; UI/visual rules in `.github/design-guide.md`.
 
 ## State & data
 
-- **Shared connection/chat state lives in the `useChat` composable**
-  (`composables/useChat.ts`), which owns the WebSocket lifecycle and exposes
-  **read-only** refs (`readonly(...)`) plus action functions.
-- `MainLayout` creates the chat instance once and provides it under a typed
-  `CHAT_INJECTION_KEY`; pages read it via the `useChatContext()` accessor (which
-  injects and throws if the provider is missing) — never a string key. Do not
-  call `useChat` again in child components — there is one socket per tab. See
-  the typed provide/inject pattern in `vue-best-practices.md`.
-- Pinia is available for additional shared stores; prefer a focused store or
-  composable over a monolith. Keep socket ownership in `useChat`.
+- **Shared connection/chat state lives in the Pinia chat store**
+  (`stores/chat.ts`, `useChatStore`), which owns the WebSocket lifecycle and
+  exposes reactive state plus action functions. Read state with
+  `storeToRefs(useChatStore())`; call actions on the store.
+- `MainLayout` reads the store and owns the connection lifecycle (`connect()` on
+  `onMounted`, `disconnect()` on `onUnmounted`) — a store has no lifecycle of its
+  own. There is one socket per tab; do not open another downstream. See the store
+  pattern in `vue-best-practices.md`.
+- Add further shared state as focused Pinia stores; prefer a focused store or
+  composable over a monolith. Any _non-store_ cross-tree sharing uses a typed
+  `InjectionKey`, never a string key.
 
-## Composables
+## Composables & stores
 
-- Name `useXxx`, return an explicit typed interface (`UseChatReturn`).
-- Own their teardown: register `onUnmounted` cleanup (close sockets, clear
-  timers) inside the composable, not in consumers.
-- Side-effecting singletons (the socket) stay inside; expose intent, not the raw
-  socket.
+- Name composables `useXxx`, return an explicit typed shape; name Pinia stores
+  `useXxxStore` (`defineStore`), e.g. the chat store (`ChatStore`).
+- Own their teardown: a composable registers `onUnmounted` cleanup (close sockets,
+  clear timers) itself. A Pinia store has **no** lifecycle, so its lifecycle owner
+  (`MainLayout` for the chat store) calls the store's teardown action
+  (`disconnect`) from `onUnmounted`.
+- Side-effecting singletons (the socket) stay inside the store/composable; expose
+  intent (actions), not the raw socket.
 
 ## Quasar usage
 

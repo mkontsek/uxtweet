@@ -9,16 +9,21 @@ Fastify + `@fastify/websocket`, hexagonal. Authoritative detail lives in
 
 ## Architecture (hold the boundaries)
 
-- **Hexagonal layers.** `domain/` (ConnectionManager, MessageService) and
-  `storage/` (IMessageStore + implementations, RedisMessageBus) have **no**
-  awareness of WebSockets. `transport/WebSocketHandler.ts` is the only place that
-  touches sockets. Never `import` from `@fastify/websocket` outside `transport/`.
+- **Hexagonal layers.** `domain/` (ConnectionManager, MessageService,
+  NicknameRegistry port) and `storage/` (IMessageStore + implementations,
+  RedisMessageBus, RedisNicknameRegistry) have **no** awareness of WebSockets.
+  `transport/WebSocketHandler.ts` is the only place that touches sockets. Never
+  `import` from `@fastify/websocket` outside `transport/`.
 - `buildApp()` assembles the Fastify instance; `server.ts` only binds the port —
   keep them separate so tests build the app without listening.
 - New persistence backends implement `IMessageStore` and are swapped in
-  `buildApp`, not in the transport.
-- Message validation lives once in `MessageService.createMessage` (trim,
-  non-empty, ≤2000). `maxPayload` is defence-in-depth, not the source of truth.
+  `buildApp`, not in the transport. Same for the `NicknameRegistry` port
+  (`LocalNicknameRegistry` / `RedisNicknameRegistry`).
+- Content rules live in the shared `messageContentSchema` (Zod);
+  `MessageService.createMessage` is the one domain gate that applies them.
+  `maxPayload` is defence-in-depth, not the source of truth. Nickname uniqueness is
+  claimed/released via the `NicknameRegistry` (per-pod or cross-pod with Redis —
+  ADR-0015), not in `ConnectionManager`.
 
 ## Never
 

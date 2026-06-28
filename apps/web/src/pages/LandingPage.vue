@@ -62,7 +62,7 @@
                     icon="refresh"
                     label="Try again"
                     class="q-mt-xs"
-                    @click="connect"
+                    @click="chat.connect"
                 />
             </div>
         </div>
@@ -72,12 +72,13 @@
 <script lang="ts" setup>
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { storeToRefs } from 'pinia';
 import { NICKNAME_MAX_LENGTH, validateNickname } from '@uxtweet/shared';
-import { useChatContext } from '../composables/useChat';
+import { useChatStore } from '../stores/chat';
 
-const chat = useChatContext();
+const chat = useChatStore();
 const router = useRouter();
-const { status, hasJoined, joinError, join, connect } = chat;
+const { status, hasJoined, joinError } = storeToRefs(chat);
 
 const nicknameInput = ref('');
 const localError = ref<string | null>(null);
@@ -127,7 +128,7 @@ function submit(): void {
     }
     localError.value = null;
     isJoining.value = true;
-    join(result.value);
+    chat.join(result.value);
 }
 
 // Server accepted the nickname → enter the chat.

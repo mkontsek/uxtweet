@@ -13,15 +13,22 @@ transport/  ──▶  domain/  ──▶  storage/ (IMessageStore port)
 - **`transport/WebSocketHandler.ts`** — the **only** file that imports
   `@fastify/websocket` or touches a raw socket. It registers `/ws`, assigns each
   connection a UUID `clientId`, sends `welcome`, parses + type-guards inbound
-  frames, and removes the client on `close`/`error`.
+  frames, **claims/releases nicknames** through the `NicknameRegistry` (claim
+  before assigning on `join`, release on `close`/`error`), and removes the client
+  on `close`/`error`.
 - **`domain/`** — `ConnectionManager` (connection registry + `send`/`broadcast`/
-  `count`) and `MessageService` (validation, persistence, in-process event bus).
-  **No Fastify, no `@fastify/websocket`, no socket types beyond the handle.**
+  `count`; records the granted name via `setNickname`, **no** uniqueness check),
+  `MessageService` (content validation via the shared `messageContentSchema`,
+  persistence, in-process event bus), and the `NicknameRegistry` **port** with
+  `LocalNicknameRegistry` (per-pod uniqueness). **No Fastify, no
+  `@fastify/websocket`, no socket types beyond the handle.**
 - **`storage/`** — `IMessageStore` is the port. `PostgresMessageStore` is the only
-  store (durable history with 30-day retention; `DATABASE_URL` is required) and
-  `RedisMessageBus` optionally fans messages out across pods. They are wired in
-  `buildApp`, never referenced from `transport/`. Tests inject a `FakeMessageStore`
-  via `buildApp({ store })` so they need no database (see [[Decisions]] ADR-0012).
+  store (durable history with 30-day retention; `DATABASE_URL` is required),
+  `RedisMessageBus` optionally fans messages out across pods, and
+  `RedisNicknameRegistry` (the `NicknameRegistry` adapter) makes nicknames unique
+  cross-pod. They are wired in `buildApp`, never referenced from `transport/`.
+  Tests inject a `FakeMessageStore` via `buildApp({ store })` so they need no
+  database (see [[Decisions]] ADR-0012/0015).
 
 If you find yourself importing a transport type into `domain/` or `storage/`, the
 boundary is wrong — pass a plain value or a domain type instead.
@@ -44,9 +51,14 @@ boundary is wrong — pass a plain value or a domain type instead.
 - **Every inbound frame is untrusted.** Parse JSON in a `try/catch`, then narrow
   with an explicit type guard (`isClientMessage`) before use. Reply to bad input
   with an `error` frame; never throw across the socket boundary.
-- Message content rules (non-empty, ≤2000 chars) live in
-  `MessageService.createMessage` — one place. Add new rules there, not in the
-  transport or the client.
+- Message content rules (trim, non-empty, ≤2000 chars) live in the shared
+  `messageContentSchema` (Zod); `MessageService.createMessage` is the one domain
+  gate that applies them (via `validateMessageContent`). Add new rules to the
+  shared schema, not in the transport or the client.
+- Nickname uniqueness is claimed via the `NicknameRegistry` (per-pod
+  `LocalNicknameRegistry`, or cross-pod `RedisNicknameRegistry` when `REDIS_URL`
+  is set), **not** in `ConnectionManager`; the transport releases the name on
+  disconnect. See [[Decisions]] ADR-0015.
 
 ## Broadcasting
 

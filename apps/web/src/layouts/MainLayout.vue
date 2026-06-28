@@ -53,23 +53,24 @@
 </template>
 
 <script lang="ts" setup>
-import { provide, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
+import { storeToRefs } from 'pinia';
 import ConnectionStatus from '../components/ConnectionStatus.vue';
 import UserListPanel from '../components/UserListPanel.vue';
-import { useChat, CHAT_INJECTION_KEY } from '../composables/useChat';
+import { useChatStore } from '../stores/chat';
 
-const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-// In production WS_URL is empty (see quasar.config); derive it from the current
-// origin so the socket targets whatever host/ingress served the SPA, at /ws.
-const WS_URL =
-    process.env.WS_URL || `${wsProtocol}//${window.location.host}/ws`;
+// The layout owns the single WebSocket lifecycle: open it once the app mounts,
+// close it on teardown. Components just read the shared store.
+const chat = useChatStore();
+const { status, userCount, nickname, hasJoined, users } = storeToRefs(chat);
 
-const chat = useChat(WS_URL);
-chat.connect();
+onMounted(() => {
+    chat.connect();
+});
 
-provide(CHAT_INJECTION_KEY, chat);
-
-const { status, userCount, nickname, hasJoined, users } = chat;
+onUnmounted(() => {
+    chat.disconnect();
+});
 
 // Starts collapsed: the user expands the roster via the header toggle. As an
 // overlay drawer it floats above the chat, so expanding it never reflows or

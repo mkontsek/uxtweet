@@ -45,7 +45,7 @@ Detailed implementation rules live in `wiki/skills/` and `.claude/skills/`:
 ## Layout
 
 ```
-apps/web     Quasar (Vue 3) SPA — components, composables/useChat, pages, layouts
+apps/web     Quasar (Vue 3) SPA — components, stores/chat (Pinia), pages, layouts
 apps/api        Fastify + @fastify/websocket — domain / storage / transport (hexagonal)
 packages/shared @uxtweet/shared — WebSocket protocol types shared by client and server
 infra/k3s-local Kubernetes manifests for local k3s (Deployments, Services, HPA, Ingress) + monitoring/ (kube-prometheus-stack)
@@ -81,11 +81,11 @@ The acceptance bar before any change is considered done: `pnpm typecheck && pnpm
 
 ## Architecture you can't see by reading one file
 
-- **`@uxtweet/shared` is the protocol contract.** Every WebSocket frame — `ClientWsMessage` (`join` | `send`, client→server) and `ServerWsMessage` (`welcome` | `joined` | `chat` | `user_count` | `user_list` | `error`, server→client) — is typed in `packages/shared/src/index.ts`, alongside the shared nickname rules (`validateNickname`) and roster types. Clients must `join` with a unique nickname before `send` is accepted. Change a frame's shape there and update **both** the server transport and the client `useChat` composable in the same change, or they silently desync. The authoritative protocol table lives in `wiki/Domain.md`.
+- **`@uxtweet/shared` is the protocol contract.** Every WebSocket frame — `ClientWsMessage` (`join` | `send`, client→server) and `ServerWsMessage` (`welcome` | `joined` | `chat` | `user_count` | `user_list` | `error`, server→client) — is typed in `packages/shared/src/index.ts`, alongside the shared input schemas (`nicknameSchema` / `messageContentSchema` and their `validateNickname` / `validateMessageContent` wrappers, built on **Zod**) and roster types. Clients must `join` with a unique nickname before `send` is accepted. Change a frame's shape there and update **both** the server transport and the client `useChat` composable in the same change, or they silently desync. The authoritative protocol table lives in `wiki/Domain.md`.
 - **The server is hexagonal — keep WebSocket concerns out of the domain.** `domain/` (ConnectionManager, MessageService) and `storage/` (IMessageStore, PostgresMessageStore, RedisMessageBus) have **no** awareness of WebSockets. `transport/WebSocketHandler.ts` is the only place that touches sockets. Never `import` from `@fastify/websocket` outside `transport/`.
 - **PostgreSQL is the only message store; there is no in-memory store.** The server requires `DATABASE_URL` and throws on boot without it. `pnpm dev` starts Postgres via Docker Compose (`compose.yaml`) on a persistent volume, so history survives restarts. Redis Pub/Sub is **optional** — it adds cross-pod fan-out for the multi-replica k3s deploy; a single process (dev, or one pod) broadcasts locally without it. Tests inject a fake store via `buildApp({ store })` and need no database. See `wiki/Decisions.md` (ADR-0012).
-- **The client owns reconnection.** `apps/web/src/composables/useChat.ts` is the single WebSocket lifecycle owner: connect, parse `ServerWsMessage`, auto-reconnect (up to 10 attempts, 3 s apart), and expose read-only refs. Components never open sockets — they read the `UseChatReturn` provided by `MainLayout` via the typed `useChatContext()` accessor (backed by `CHAT_INJECTION_KEY`), never a string inject key.
-- **Message validation lives in the domain, once.** `MessageService.createMessage` trims and enforces non-empty / ≤2000 chars. The client `maxlength` and the server `maxPayload` are defence-in-depth, not the source of truth. Add new content rules in `MessageService`.
+- **The client owns reconnection.** `apps/web/src/stores/chat.ts` (the Pinia `useChatStore`) is the single WebSocket lifecycle owner: connect, parse `ServerWsMessage`, auto-reconnect (up to 10 attempts, 3 s apart), persist the nickname to `localStorage` so a reload re-joins, and expose reactive state + actions. `MainLayout` drives connect/disconnect from its own `onMounted`/`onUnmounted` (a store has no lifecycle of its own). Components never open sockets — they read the store via `useChatStore()` (state through `storeToRefs`), not provide/inject. See `wiki/Decisions.md` (ADR-0016).
+- **Message validation: rules in the shared Zod schema, gated once in the domain.** Content rules live in `messageContentSchema` (`@uxtweet/shared`); `MessageService.createMessage` is the single domain gate that applies them via `validateMessageContent` and throws `MessageValidationError`. The client `maxlength` and the server `maxPayload` are defence-in-depth, not the source of truth. Add new content rules to the shared schema. Nickname uniqueness is claimed through the `NicknameRegistry` port (per-pod, or cross-pod via Redis — ADR-0015), not in `ConnectionManager`.
 
 ## Hard Rules
 
@@ -100,8 +100,8 @@ These have been introduced by mistake before. Do **not** add them; if a task see
 
 - **No parallel HTTP/REST transport for chat data.** Messages and history move over the WebSocket only — history arrives in the `welcome` frame, not via a `/api/messages*` route. Adding any HTTP route that serves or mutates chat data is an architectural change that needs an ADR in `wiki/Decisions.md` **before** code.
 - **No test-data generators, seeders, or dev-only tooling in app/UI code.** No "generate N test messages" endpoints, buttons, or feature-flagged dev panels in `apps/api/src` or `apps/web/src`. Test fixtures belong in `tests/` only.
-- **Presentational components never fetch, open sockets, or touch `window.location`.** Data/connection logic lives in composables; refresh state **reactively** — never `window.location.reload()`. See `wiki/skills/vue-best-practices.md`.
-- **No typed-`any` escape hatches, magic-string inject keys, or loosened `tsconfig`.** Use typed `InjectionKey` + accessor composables for shared state.
+- **Presentational components never fetch, open sockets, or touch `window.location`.** Data/connection logic lives in the Pinia chat store (or composables); refresh state **reactively** — never `window.location.reload()`. See `wiki/skills/vue-best-practices.md`.
+- **No typed-`any` escape hatches, magic-string keys, or loosened `tsconfig`.** Shared client state lives in the Pinia chat store (`useChatStore`); any provide/inject uses a typed `InjectionKey`, never a string.
 
 ## Interaction Style
 
@@ -141,8 +141,8 @@ Authoritative details: `wiki/skills/vue-quasar.md` (conventions) and `wiki/skill
 
 - One component per `.vue` file, Composition API with `<script lang="ts" setup>`.
 - Type props/emits with the generic `defineProps<...>()` / `defineEmits<...>()` forms.
-- Shared async/connection state lives in composables (`useChat`); components stay presentational — they render props and emit intent, never fetch or open sockets.
-- Share cross-tree state with a typed `InjectionKey` + accessor composable (`useChatContext()`), never a magic string; props are read-only (one-way data flow).
+- Shared async/connection state lives in the Pinia chat store (`useChatStore` in `stores/chat.ts`); components stay presentational — they render props and emit intent, never fetch or open sockets.
+- Read shared state from the store via `useChatStore()` + `storeToRefs` (a typed accessor, no magic strings); props are read-only (one-way data flow). Any non-store provide/inject still uses a typed `InjectionKey`.
 - Derive with `computed`; reserve `watch`/`watchEffect` for genuine side effects. Effects clean up in `onUnmounted` inside the composable that owns them.
 - Add a stable `data-cy` attribute to interactive elements for e2e selectors.
 - Use Quasar components and the Material icon set; do not handcraft SVG icons unless asked.

@@ -3,6 +3,78 @@
 Newest first. Each entry: context → decision → consequences. Update this file in
 the same change that alters a decision (see [[architecture-update]]).
 
+## ADR-0016 — Pinia for shared client state; nickname persisted across reloads
+
+**Context.** Cross-tree chat state was shared via a typed `provide/inject`
+(`CHAT_INJECTION_KEY` + `useChatContext()`), with `MainLayout` owning the single
+`useChat` instance. It worked, but Pinia is the de-facto Vue 3 state standard and
+lowers the ramp for new contributors (the client already listed Pinia as available
+for stores). Separately, a page reload dropped the session — the user had to
+retype their nickname even though the server re-associates messages by name.
+**Decision.** Move the WebSocket lifecycle + chat state into a Pinia **setup
+store** (`apps/web/src/stores/chat.ts`, `useChatStore`), installed via a boot file
+(`boot/pinia.ts`). Components read state with `storeToRefs(useChatStore())` and
+call actions directly; `provide/inject`, `CHAT_INJECTION_KEY`, and
+`useChatContext()` are removed. Because a Pinia store has no component lifecycle,
+`MainLayout` now owns connect/disconnect from its own `onMounted`/`onUnmounted`.
+The store also **remembers the chosen nickname in `localStorage`** (key
+`uxtweet:nickname`): written on a confirmed `joined`, re-sent automatically when
+the socket (re)opens after a reload, and cleared if the server rejects it. An
+`isRestoringSession` flag lets `ChatPage` wait for the auto-rejoin instead of
+bouncing to the landing screen.
+**Consequences.** One idiomatic state mechanism, no bespoke inject plumbing. A
+refresh transparently re-joins the same name (uniqueness is still freed/reclaimed
+on the socket cycle). Identity is still ephemeral (a new `clientId` per socket, no
+auth) — only the display name persists, client-side. Tests install a real Pinia
+and patch store state / spy on actions; the web suite gains an in-memory
+`localStorage` polyfill (`apps/web/test/setup.ts`) because jsdom ships none here.
+Supersedes the typed-provide/inject guidance in [[vue-best-practices]] for the
+chat instance — the typed-key rule still applies to any _other_ provide/inject.
+
+## ADR-0015 — Nickname uniqueness via a registry port (cross-pod with Redis)
+
+**Context.** `ConnectionManager.claimNickname` enforced uniqueness only across the
+connections on **one pod** (ADR-0007), so two replicas could each host an "alice".
+With Redis already present for cross-pod message fan-out, nickname coordination can
+be made global.
+**Decision.** Introduce a `NicknameRegistry` **port** (`domain/NicknameRegistry.ts`)
+with async `claim`/`release`. `LocalNicknameRegistry` keeps the per-process
+behaviour (dev, single replica); `RedisNicknameRegistry`
+(`storage/RedisNicknameRegistry.ts`) makes a name globally unique via
+`SET uxtweet:nick:<lower> <clientId> NX EX <ttl>`, a compare-and-delete (Lua)
+release, idempotent re-claim by the same client, and a TTL heartbeat so a live
+pod's names don't expire mid-session while a crashed pod's free automatically.
+`buildApp` wires the Redis registry when `REDIS_URL` is set, else the local one —
+the same seam as the message store/bus. `ConnectionManager` drops its uniqueness
+check and only records the granted name (`setNickname`) for display/roster; the
+transport claims via the registry before assigning and **releases on disconnect**.
+`joinClient` is now async and releases the reservation if the socket dropped
+mid-claim.
+**Consequences.** Nicknames are unique across every pod when Redis is on, per-pod
+otherwise — uniqueness no longer relies on all of a name's holders sharing one
+process. Extends and resolves the "not global" caveat of **ADR-0007**. The live
+roster / `user_count` remain per-pod by design (ADR-0011); a global roster is still
+future work. Adds a small Redis keyspace (`uxtweet:nick:*`) and a refresh timer.
+
+## ADR-0014 — Zod schemas as the shared validation source of truth
+
+**Context.** Nickname and message-content rules were hand-written `if` checks —
+`validateNickname` in `@uxtweet/shared` and inline length/empty checks in
+`MessageService`. Functional, but the rules were expressed twice in different
+styles and harder to share/extend.
+**Decision.** Adopt **Zod** (pinned `4.4.3`) in `@uxtweet/shared` as the single
+definition of input rules: `nicknameSchema` and `messageContentSchema`, each
+carrying the project's exact messages. `validateNickname` and a new
+`validateMessageContent` wrap `safeParse` and return the existing discriminated
+`{ ok, value } | { ok, reason }` result, so call sites (client landing form,
+server transport, `MessageService`) are unchanged in shape. `MessageService`
+delegates content validation to `validateMessageContent` rather than inlining the
+checks; it remains the single domain gate that throws `MessageValidationError`.
+**Consequences.** One schema per rule, shared by client and server, ready to reuse
+(e.g. client-side message validation) and to extend without rewriting predicates.
+`zod` becomes the first runtime dependency of `@uxtweet/shared` (and thus of both
+apps); bundle cost is small and the schemas are tree-shakeable.
+
 ## ADR-0013 — Production-shaped hardening: graceful WS drain, non-root pods, secret-backed Grafana
 
 **Context.** A review pass found the deploy claimed "graceful WebSocket draining"
@@ -162,6 +234,10 @@ sanitization (https://docs.logrocket.com/reference/dom). Local `pnpm dev`
 sessions are excluded by the production gate.
 
 ## ADR-0007 — Nicknames: claimed per-connection, unique per-pod
+
+> **Cross-pod uniqueness added by [ADR-0015](#adr-0015--nickname-uniqueness-via-a-registry-port-cross-pod-with-redis).**
+> The per-pod claim moved behind a `NicknameRegistry` port; with Redis it is now
+> globally unique. The per-connection, free-on-disconnect model below still holds.
 
 **Context.** Messages showed a truncated `clientId`, which is opaque and changes on
 every reconnect. Users want to choose a display name, and names should not collide.

@@ -3,7 +3,7 @@ import { defineComponent, h } from 'vue';
 import type { VNode } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
-import type { ConnectionStatus } from '../../composables/useChat';
+import type { ConnectionStatus } from '../../stores/chat';
 import ConnectionStatusChip from '../ConnectionStatus.vue';
 
 // Expose the chip's reactive props as data-* attributes so behaviour (colour,

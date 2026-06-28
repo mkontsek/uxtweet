@@ -13,22 +13,33 @@
 </template>
 
 <script lang="ts" setup>
+import { watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { storeToRefs } from 'pinia';
 import MessageList from '../components/MessageList.vue';
 import MessageInput from '../components/MessageInput.vue';
-import { useChatContext } from '../composables/useChat';
+import { useChatStore } from '../stores/chat';
 
-const chat = useChatContext();
+const chat = useChatStore();
 const router = useRouter();
-const { messages, status, nickname, hasJoined, sendMessage } = chat;
+const { messages, status, nickname, hasJoined, isRestoringSession } =
+    storeToRefs(chat);
 
-// Guard: nobody reaches the chat without first claiming a nickname.
-if (!hasJoined.value) {
-    void router.replace({ name: 'landing' });
+// Guard: nobody reaches the chat without a nickname. A reload restoring a saved
+// nickname is still in flight, so wait for it rather than bouncing to landing.
+function guardJoined(): void {
+    if (!hasJoined.value && !isRestoringSession.value) {
+        void router.replace({ name: 'landing' });
+    }
 }
+guardJoined();
+
+// If a session restore ultimately fails (the saved name was rejected or the
+// socket gave up), fall back to the landing screen.
+watch([hasJoined, isRestoringSession], guardJoined);
 
 function onSend(content: string): void {
-    sendMessage(content);
+    chat.sendMessage(content);
 }
 </script>
 

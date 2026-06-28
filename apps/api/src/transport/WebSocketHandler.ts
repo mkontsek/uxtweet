@@ -11,6 +11,7 @@ import { validateNickname } from '@uxtweet/shared';
 import type { ConnectionManager } from '../domain/ConnectionManager';
 import type { MessageService } from '../domain/MessageService';
 import { MessageValidationError } from '../domain/MessageService';
+import type { NicknameRegistry } from '../domain/NicknameRegistry';
 import { WS_READY_STATE } from '../domain/wsReadyState';
 
 const HISTORY_LIMIT = 50;
@@ -22,7 +23,8 @@ const HISTORY_LIMIT = 50;
 export function registerWebSocketHandler(
     fastify: FastifyInstance,
     connections: ConnectionManager,
-    messages: MessageService
+    messages: MessageService,
+    nicknames: NicknameRegistry
 ): void {
     fastify.get('/ws', { websocket: true }, (socket: WebSocket) => {
         const clientId = uuidv4();
@@ -69,20 +71,25 @@ export function registerWebSocketHandler(
                 clientId,
                 connections,
                 messages,
+                nicknames,
                 socket,
                 fastify.log
             );
         });
 
         socket.on('close', () => {
-            const wasNamed = connections.nicknameOf(clientId) !== undefined;
+            const nickname = connections.nicknameOf(clientId);
             connections.remove(clientId);
+            // Free the global claim so the name is available again elsewhere.
+            if (nickname !== undefined) {
+                releaseNickname(nicknames, clientId, nickname, fastify.log);
+            }
             connections.broadcast({
                 type: 'user_count',
                 count: connections.count,
             });
             // A named user leaving changes the roster; an anonymous one does not.
-            if (wasNamed) {
+            if (nickname !== undefined) {
                 connections.broadcast({
                     type: 'user_list',
                     users: connections.roster(),
@@ -92,8 +99,27 @@ export function registerWebSocketHandler(
 
         socket.on('error', (err: Error) => {
             fastify.log.error({ err, clientId }, 'WebSocket error');
+            const nickname = connections.nicknameOf(clientId);
             connections.remove(clientId);
+            if (nickname !== undefined) {
+                releaseNickname(nicknames, clientId, nickname, fastify.log);
+            }
         });
+    });
+}
+
+/**
+ * Fire-and-forget release of a client's global nickname claim. Errors are
+ * logged, never thrown, so socket teardown can't surface an unhandled rejection.
+ */
+function releaseNickname(
+    nicknames: NicknameRegistry,
+    clientId: string,
+    nickname: string,
+    log: FastifyBaseLogger
+): void {
+    void nicknames.release(clientId, nickname).catch((err: unknown) => {
+        log.error({ err, clientId }, 'Failed to release nickname');
     });
 }
 
@@ -102,6 +128,7 @@ async function routeClientMessage(
     clientId: string,
     connections: ConnectionManager,
     messages: MessageService,
+    nicknames: NicknameRegistry,
     socket: WebSocket,
     log: FastifyBaseLogger
 ): Promise<void> {
@@ -122,7 +149,13 @@ async function routeClientMessage(
     connections.touchActivity(clientId);
 
     if (parsed.type === 'join') {
-        joinClient(parsed.nickname, clientId, connections, socket);
+        await joinClient(
+            parsed.nickname,
+            clientId,
+            connections,
+            nicknames,
+            socket
+        );
         return;
     }
 
@@ -154,15 +187,17 @@ async function routeClientMessage(
 }
 
 /**
- * Validate a requested nickname and atomically claim it. Replies with `joined`
+ * Validate a requested nickname and atomically claim it via the registry
+ * (unique per-pod or cross-pod, depending on the wiring). Replies with `joined`
  * on success, or an `error` carrying a specific code the client reacts to.
  */
-function joinClient(
+async function joinClient(
     rawNickname: string,
     clientId: string,
     connections: ConnectionManager,
+    nicknames: NicknameRegistry,
     socket: WebSocket
-): void {
+): Promise<void> {
     // A connection claims a nickname exactly once. Ignore a duplicate join from
     // an already-named client so a repeated `join` can't cycle nicknames or
     // strand the previously-held name as taken.
@@ -176,11 +211,21 @@ function joinClient(
         return;
     }
 
-    const claimed = connections.claimNickname(clientId, validation.value);
+    const claimed = await nicknames.claim(clientId, validation.value);
     if (!claimed) {
         sendError(socket, 'That nickname is already taken.', 'nickname_taken');
         return;
     }
+
+    // The socket may have dropped while the claim was in flight (the close
+    // handler can't release a name it never saw assigned); release it here
+    // instead of stranding the reservation.
+    if (socket.readyState !== WS_READY_STATE.OPEN) {
+        await nicknames.release(clientId, validation.value);
+        return;
+    }
+
+    connections.setNickname(clientId, validation.value);
 
     const joined: ServerJoinedMessage = {
         type: 'joined',

@@ -3,8 +3,11 @@ import type { FastifyInstance } from 'fastify';
 import fastifyWebSocket from '@fastify/websocket';
 import { ConnectionManager } from './domain/ConnectionManager';
 import { MessageService } from './domain/MessageService';
+import { LocalNicknameRegistry } from './domain/NicknameRegistry';
+import type { NicknameRegistry } from './domain/NicknameRegistry';
 import { PostgresMessageStore } from './storage/PostgresMessageStore';
 import { RedisMessageBus } from './storage/RedisMessageBus';
+import { RedisNicknameRegistry } from './storage/RedisNicknameRegistry';
 import { registerWebSocketHandler } from './transport/WebSocketHandler';
 import { registerMetrics } from './transport/metrics';
 import type { ChatMessage } from '@uxtweet/shared';
@@ -64,7 +67,8 @@ export async function buildApp(
         return { status: 'ok' };
     });
 
-    const { store, bus, close } = await createMessageInfrastructure(options);
+    const { store, bus, nicknames, close } =
+        await createMessageInfrastructure(options);
     const connections = new ConnectionManager();
     const messageService = new MessageService(store);
 
@@ -92,7 +96,7 @@ export async function buildApp(
         });
     }
 
-    registerWebSocketHandler(fastify, connections, messageService);
+    registerWebSocketHandler(fastify, connections, messageService, nicknames);
 
     fastify.addHook('onClose', async () => {
         await close?.();
@@ -104,15 +108,20 @@ export async function buildApp(
 interface MessageInfrastructure {
     store: IMessageStore;
     bus?: RedisMessageBus;
+    nicknames: NicknameRegistry;
     close?: () => Promise<void>;
 }
 
 async function createMessageInfrastructure(
     options: AppOptions
 ): Promise<MessageInfrastructure> {
-    // Tests inject their own store and skip the database entirely.
+    // Tests inject their own store and skip the database entirely; a local
+    // registry gives them per-process nickname uniqueness with no Redis.
     if (options.store !== undefined) {
-        return { store: options.store };
+        return {
+            store: options.store,
+            nicknames: new LocalNicknameRegistry(),
+        };
     }
 
     const databaseUrl = process.env['DATABASE_URL'];
@@ -131,11 +140,13 @@ async function createMessageInfrastructure(
     await store.init();
 
     // Redis is optional: it provides cross-pod fan-out for the multi-replica k3s
-    // deploy. A single process (dev, or one pod) broadcasts locally without it.
+    // deploy. A single process (dev, or one pod) broadcasts locally without it
+    // and enforces nickname uniqueness per-pod via the local registry.
     const redisUrl = process.env['REDIS_URL'];
     if (redisUrl === undefined) {
         return {
             store,
+            nicknames: new LocalNicknameRegistry(),
             close: async (): Promise<void> => {
                 await store.close();
             },
@@ -145,11 +156,17 @@ async function createMessageInfrastructure(
     const bus = new RedisMessageBus(redisUrl);
     await bus.connect();
 
+    // With Redis, nickname uniqueness is enforced cross-pod so a name can't be
+    // held on two replicas at once.
+    const nicknames = new RedisNicknameRegistry(redisUrl);
+    await nicknames.connect();
+
     return {
         store,
         bus,
+        nicknames,
         close: async (): Promise<void> => {
-            await Promise.all([bus.close(), store.close()]);
+            await Promise.all([bus.close(), nicknames.close(), store.close()]);
         },
     };
 }

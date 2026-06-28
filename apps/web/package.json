@@ -17,6 +17,7 @@
     "@uxtweet/shared": "workspace:*",
     "logrocket": "12.1.1",
     "motion-v": "2.2.1",
+    "pinia": "3.0.4",
     "quasar": "2.19.3",
     "vue": "3.5.35",
     "vue-router": "4.6.4"

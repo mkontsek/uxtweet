@@ -83,4 +83,33 @@ describe('MessageService', () => {
         ).rejects.toThrow();
         expect(listener).not.toHaveBeenCalled();
     });
+
+    it('runs every listener even when one rejects', async () => {
+        const failing = vi.fn().mockRejectedValue(new Error('boom'));
+        const healthy = vi.fn();
+        service.onMessageCreated(failing);
+        service.onMessageCreated(healthy);
+
+        await expect(
+            service.createMessage('client-1', 'alice', 'hi')
+        ).rejects.toThrow('boom');
+        // The healthy listener still ran despite the earlier rejection.
+        expect(healthy).toHaveBeenCalledOnce();
+    });
+
+    it('aggregates multiple listener failures into an AggregateError', async () => {
+        service.onMessageCreated(() =>
+            Promise.reject(new Error('first failure'))
+        );
+        service.onMessageCreated(() =>
+            Promise.reject(new Error('second failure'))
+        );
+
+        await expect(
+            service.createMessage('client-1', 'alice', 'hi')
+        ).rejects.toMatchObject({
+            name: 'AggregateError',
+            errors: [new Error('first failure'), new Error('second failure')],
+        });
+    });
 });

@@ -12,46 +12,38 @@ This file is the authoritative source. It is mirrored as an invokable skill at
 and defers here for the full detail — keep the two in sync when this file
 changes.
 
-## Typed provide / inject
+## Shared state: the Pinia store
 
-Cross-tree state is shared with a typed **`InjectionKey`**, never a magic string.
-The key carries the value type, so consumers need no per-call generic and no
-repeated null-check. Pair every provided value with an **accessor composable**
-that injects once and throws a clear error when the provider is missing.
-
-```ts
-// composables/useChat.ts
-export const CHAT_INJECTION_KEY: InjectionKey<UseChatReturn> = Symbol('chat');
-
-export function useChatContext(): UseChatReturn {
-    const chat = inject(CHAT_INJECTION_KEY);
-    if (!chat) {
-        throw new Error('Chat context not provided. Wrap with MainLayout.');
-    }
-    return chat;
-}
-```
+Cross-tree state (the chat connection + its reactive data) lives in a **Pinia
+setup store**, `useChatStore` (`stores/chat.ts`), installed via `boot/pinia.ts`.
+Components read it directly — no provide/inject plumbing (ADR-0016).
 
 ```ts
-// provider — layouts/MainLayout.vue
-provide(CHAT_INJECTION_KEY, chat);
-
 // consumer — any page/component
-const chat = useChatContext();
+const chat = useChatStore();
+const { status, hasJoined } = storeToRefs(chat); // state: keep refs reactive
+chat.join(nickname); // actions: call on the store object
 ```
 
-- **Never** `provide('chat', …)` / `inject<T>('chat')` with a string key — it is
-  untyped and duplicates the missing-provider guard at every call site.
-- One provider owns the instance (`MainLayout` creates the single socket); do not
-  call `useChat()` again downstream. See [[vue-quasar]] § State & data.
+- Read reactive **state/getters via `storeToRefs`**; only **actions** are safe to
+  destructure. `const { status } = chat` snapshots the value and **loses
+  reactivity** — don't.
+- One store instance owns the single socket. Because a store has no component
+  lifecycle, **`MainLayout` drives it**: `connect()` in `onMounted`, `disconnect()`
+  in `onUnmounted`. Do not open a second connection downstream.
+- If you ever need plain `provide/inject` (not a store), still use a typed
+  **`InjectionKey`** symbol with an accessor that throws when the provider is
+  missing — **never** a magic string `provide('chat', …)` / `inject<T>('chat')`.
+  See [[vue-quasar]] § State & data.
 
 ## One-way data flow
 
 - Props are **read-only**. Never mutate a prop or a value reached through one;
   emit an event and let the owner change it (`MessageInput` emits `send`, never
   writes parent state).
-- Composables expose `readonly(...)` refs plus action functions. Consumers read
-  refs and call actions — they never reassign the refs.
+- The chat store (and any composable) exposes reactive state plus action
+  functions. Consumers read state (via `storeToRefs` for a store) and call actions
+  — they never reassign the refs.
 - State flows **down** (props / injected refs), intent flows **up** (emits /
   action calls). A component that needs to "change" shared state calls an action,
   it does not reach in.
@@ -70,8 +62,10 @@ const chat = useChatContext();
 ## Effects own their teardown
 
 - Whatever creates an effect cleans it up: sockets, timers, and listeners are
-  closed in `onUnmounted` **inside the composable**, never in consumers
-  (`useChat` clears its reconnect timer and closes the socket itself).
+  closed in `onUnmounted` by the **owner** of the effect. The chat store has no
+  lifecycle, so `MainLayout` (its lifecycle owner) calls `disconnect()` in
+  `onUnmounted` to close the socket and clear the reconnect timer; a composable
+  that creates an effect tears it down in its own `onUnmounted`.
 - `watch`/`watchEffect` that add external listeners return a cleanup function.
 - Lifecycle hooks, `inject`, `provide`, and `useRouter` must be called
   **synchronously at the top of `setup`** — never after `await`, never inside a

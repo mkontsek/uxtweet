@@ -22,7 +22,7 @@ Detailed, authoritative implementation rules:
 - [[wiki]] — how to maintain this knowledge base
 - [[architecture-update]] — when/how to update the wiki on architectural change
 - [[vue-quasar]] — Vue 3 + Quasar client conventions
-- [[vue-best-practices]] — idiomatic Vue 3 patterns (typed inject, data flow, effects)
+- [[vue-best-practices]] — idiomatic Vue 3 patterns (Pinia store state, data flow, effects)
 - [[fastify-websockets]] — server domain/storage/transport conventions
 - [[typescript]] — TypeScript rules
 - [[testing]] — Vitest patterns
@@ -33,14 +33,17 @@ Detailed, authoritative implementation rules:
 
 ## Current status
 
-Single-room public chat. Users pick a nickname on a landing screen (unique
-per-pod, case-insensitive) before entering the room; messages are labelled by
-nickname. Messages are always persisted in PostgreSQL (30-day retention) — `pnpm
-dev` starts it via Docker Compose, so history survives restarts; the k3s deploy
-adds Redis Pub/Sub for cross-pod broadcast. The deployment scales the
-**connection** tier horizontally (HPA; 1→4 locally, higher in prod). Runs on
-local k3s (`infra/k3s-local/`) with **kube-prometheus-stack** monitoring and a
-server `/metrics` endpoint — see [[Operations]].
+Single-room public chat. Users pick a nickname on a landing screen
+(case-insensitive uniqueness — per-pod, or cross-pod when Redis backs the
+`NicknameRegistry`) before entering the room; messages are labelled by nickname.
+The chosen name is remembered in `localStorage`, so a reload re-joins without
+retyping. Client state lives in a **Pinia** store; input rules (nickname, message
+content) are **Zod** schemas in `@uxtweet/shared`. Messages are always persisted in
+PostgreSQL (30-day retention) — `pnpm dev` starts it via Docker Compose, so history
+survives restarts; the k3s deploy adds Redis Pub/Sub for cross-pod broadcast. The
+deployment scales the **connection** tier horizontally (HPA; 1→4 locally, higher in
+prod). Runs on local k3s (`infra/k3s-local/`) with **kube-prometheus-stack**
+monitoring and a server `/metrics` endpoint — see [[Operations]].
 
 ## Acceptance bar
 

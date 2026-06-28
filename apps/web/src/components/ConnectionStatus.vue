@@ -18,7 +18,7 @@
 
 <script lang="ts" setup>
 import { computed } from 'vue';
-import type { ConnectionStatus } from '../composables/useChat';
+import type { ConnectionStatus } from '../stores/chat';
 
 const props = defineProps<{
     status: ConnectionStatus;

@@ -43,29 +43,16 @@ export class ConnectionManager {
     }
 
     /**
-     * Atomically claim a nickname for a client. Uniqueness is enforced
-     * case-insensitively across all currently connected clients; the original
-     * casing is preserved for display. Returns `false` when another live client
-     * already holds the nickname, or when the client id is unknown.
+     * Record the nickname a client has been granted, for display and the
+     * roster. Uniqueness is **not** enforced here — that is the
+     * {@link NicknameRegistry}'s job (local or cross-pod), claimed by the
+     * transport before this is called. No-op for an unknown client id.
      */
-    claimNickname(clientId: ClientId, nickname: string): boolean {
+    setNickname(clientId: ClientId, nickname: string): void {
         const client = this.clients.get(clientId);
-        if (!client) {
-            return false;
+        if (client) {
+            client.nickname = nickname;
         }
-
-        const wanted = nickname.toLowerCase();
-        for (const other of this.clients.values()) {
-            if (other.id === clientId) {
-                continue;
-            }
-            if (other.nickname?.toLowerCase() === wanted) {
-                return false;
-            }
-        }
-
-        client.nickname = nickname;
-        return true;
     }
 
     /**

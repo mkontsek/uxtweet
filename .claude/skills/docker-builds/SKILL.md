@@ -11,7 +11,7 @@ dev dependencies, caches, source, and tests never reach the runtime stage.
 
 UXTweet ships two images, both built from the repo root with multi-stage builds:
 
-- **api** (`apps/api/Dockerfile`) — Node 24 Alpine running `node apps/api/dist/server.js`.
+- **api** (`apps/api/Dockerfile`) — Node 24.22.1 Alpine running `node apps/api/dist/server.js`.
 - **web** (`apps/web/Dockerfile`) — static Quasar SPA served by `nginx:1.27-alpine`.
 
 ## Rules
@@ -20,7 +20,7 @@ UXTweet ships two images, both built from the repo root with multi-stage builds:
 2. Copy only runtime artifacts into the final image — for the server that is `packages/shared/dist` and `apps/api/dist`; for the web app it is `apps/web/dist/spa` into `/usr/share/nginx/html`.
 3. Prune dev dependencies before assembling the server runtime: install with `pnpm install --frozen-lockfile --prod --ignore-scripts` in the runtime stage (the build stage installs the full tree). `--ignore-scripts` is required — the root `prepare` hook runs `husky`, a dev-only tool absent from the prod tree.
 4. The web runtime carries **no** Node and **no** `node_modules` — nginx serves pre-built static files only.
-5. Pin base images by minor (Node images `node:24-alpine` — the project floor is Node 24, which also satisfies `@quasar/app-vite`'s Node 22.22+; `nginx:1.27-alpine`) and pin pnpm via `corepack prepare pnpm@9.15.0` to match `packageManager`.
+5. Pin base images by minor (Node images `node:24.22.1-alpine` — the project floor is Node 24.22.1, which also satisfies `@quasar/app-vite`'s Node 22.22+; `nginx:1.27-alpine`) and pin pnpm via `corepack prepare pnpm@9.15.0` to match `packageManager`.
 6. Keep `.dockerignore` tight so the build context excludes `node_modules`, `dist`, `.turbo`, `.quasar`, `coverage`, `infra/`, `wiki/`, `scripts/`, `.git`, and env/log files.
 7. Always `COPY` the workspace manifests (`pnpm-workspace.yaml`, root `package.json`, `pnpm-lock.yaml`, and each touched package's `package.json`) **before** source so `pnpm install` layers cache on lockfile changes only.
 8. Build `@uxtweet/shared` before the app that consumes it (`pnpm --filter @uxtweet/shared build`).
@@ -30,7 +30,7 @@ UXTweet ships two images, both built from the repo root with multi-stage builds:
 
 These are the levers for keeping the images as small as possible; apply all that fit:
 
-- **Alpine bases, pinned by minor** (`node:24-alpine`, `nginx:1.27-alpine`) — never the full Debian variants.
+- **Alpine bases, pinned by minor** (`node:24.22.1-alpine`, `nginx:1.27-alpine`) — never the full Debian variants.
 - **Prod-only deps** in the server runtime (`--prod`), and drop the pnpm store cache after installing so its tarballs don't bake into the layer: `pnpm install --frozen-lockfile --prod && pnpm store prune`.
 - **One install layer.** Chain install + cache cleanup in a single `RUN` so the cache never lands in a committed layer.
 - **No source or tests in runtime** — copy only built `dist` artifacts, never `src/`, test files, or config the process doesn't read at runtime.

@@ -7,10 +7,10 @@ UXTweet ships **two** multi-stage images, both built from the repo root:
 
 ## api (`apps/api/Dockerfile`)
 
-- Build stage: `node:24-alpine`, pnpm pinned via `corepack prepare pnpm@9.15.0`.
+- Build stage: `node:24.22.1-alpine`, pnpm pinned via `corepack prepare pnpm@9.15.0`.
   Copy manifests + lockfile first, `pnpm install --frozen-lockfile`, then source;
   build `@uxtweet/shared` then the server (`tsup`).
-- Runtime stage: fresh `node:24-alpine`, `pnpm install --frozen-lockfile --prod --ignore-scripts`
+- Runtime stage: fresh `node:24.22.1-alpine`, `pnpm install --frozen-lockfile --prod --ignore-scripts`
   (dev deps pruned), copy only `packages/shared/dist` + `apps/api/dist`. Run as
   the non-root `node` user: `node apps/api/dist/server.js`.
 

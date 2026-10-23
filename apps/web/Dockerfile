@@ -1,6 +1,6 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
 # Node 24 (satisfies @quasar/app-vite's Node 22.22+ floor). Runtime stage below is nginx-only.
-FROM node:24-alpine AS builder
+FROM node:24.22.1-alpine AS builder
 
 WORKDIR /app
 

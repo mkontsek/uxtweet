@@ -1,5 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM node:24-alpine AS builder
+FROM node:24.22.1-alpine AS builder
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN pnpm --filter @uxtweet/shared build
 RUN pnpm --filter @uxtweet/api build
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM node:24-alpine AS runner
+FROM node:24.22.1-alpine AS runner
 
 WORKDIR /app
 
